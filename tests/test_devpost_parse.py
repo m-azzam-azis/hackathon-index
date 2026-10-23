@@ -71,3 +71,15 @@ def test_project():
     hyper, azure = d["submitted_to"]
     assert hyper["hackathon_url"] == "https://hypermode-knowledge-graph-ai.devpost.com/"
     assert hyper["prizes"] == ["Best Use of Neo4j"] and azure["prizes"] == []
+
+
+def test_project_without_template_headings():
+    html = """<div id="app-details-left">
+      <div id="gallery"><ul><li><p><i>Splash screen</i></p></li></ul></div>
+      <div><p>Reconix is an AI-powered pentesting browser.</p><p>Built in Electron.</p></div>
+      <div id="built-with"><h2>Built With</h2><ul><li><span class="cp-tag">electron</span></li></ul></div>
+    </div>"""
+    d = parse.parse_project(html)
+    assert list(d["writeup"]) == ["Description"]
+    assert "Splash screen" not in d["writeup"]["Description"]
+    assert d["writeup"]["Description"].endswith("Built in Electron.")

@@ -183,14 +183,17 @@ def parse_project(html: str) -> dict:
     details = soup.select_one("#app-details-left")
     if details:
         for el in details.find_all(["h2", "p", "ul", "ol", "pre", "blockquote", "h3"]):
-            if el.find_parent(id="built-with") or el.find_parent(class_="app-links"):
+            if el.find_parent(id=["built-with", "gallery"]) or el.find_parent(class_="app-links") \
+                    or el.get("id") == "gallery":
                 continue
             if el.name == "h2":
                 current = _text(el)
                 if current not in _SKIP_SECTIONS:
                     writeup.setdefault(current, "")
-            elif current and current not in _SKIP_SECTIONS and el.find_parent(["ul", "ol"]) is None:
-                writeup[current] = (writeup[current] + "\n" + el.get_text(" ", strip=True)).strip()
+            elif current not in _SKIP_SECTIONS and el.find_parent(["ul", "ol"]) is None:
+                # Writeups without the template headings go under "Description".
+                key = current or "Description"
+                writeup[key] = (writeup.get(key, "") + "\n" + el.get_text(" ", strip=True)).strip()
 
     links = [a.get("title") or a.get("href") for a in soup.select('[data-role="software-urls"] a')]
     links = [l for l in links if l]
