@@ -1,6 +1,6 @@
 """Devpost crawl stages. Each stage is resumable: cached pages are never re-fetched.
 
-    list      every ended hackathon from the listing JSON (cheap: 9 per request)
+    list      every ended hackathon from the listing JSON (cheap: 40 per request)
     overview  prize blocks + judges, for in-window events with at least one cash prize
     gallery   every submission card, for events whose estimated cash clears the bar
     projects  full project pages: all winners + a random sample of non-winners
@@ -15,7 +15,7 @@ from ...fetcher import Fetcher
 from . import parse
 
 SOURCE = parse.SOURCE
-LIST_URL = "https://devpost.com/api/hackathons?status[]=ended&page={page}"
+LIST_URL = "https://devpost.com/api/hackathons?status[]=ended&per_page=40&page={page}"  # 40 is the max
 
 
 def crawl_list(conn: sqlite3.Connection, fetcher: Fetcher, since: str, max_pages: int | None = None) -> None:

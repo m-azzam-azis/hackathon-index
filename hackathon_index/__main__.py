@@ -25,9 +25,9 @@ def main() -> None:
     c.add_argument("--min-cash", type=float, default=1000, help="USD cash needed to crawl the gallery")
     c.add_argument("--limit", type=int, help="only the N most recent qualifying hackathons (pilot runs)")
     c.add_argument("--max-list-pages", type=int, help="stop the listing early (pilot runs)")
-    c.add_argument("--loser-rate", type=float, default=0.15, help="share of non-winners to fetch in full")
-    c.add_argument("--min-losers", type=int, default=5, help="at least this many non-winners per event")
-    c.add_argument("--interval", type=float, default=4.0, help="seconds between requests (plus jitter)")
+    c.add_argument("--loser-rate", type=float, default=0.0, help="share of non-winners to fetch in full (0 = winners only)")
+    c.add_argument("--min-losers", type=int, default=0, help="at least this many non-winners per event")
+    c.add_argument("--interval", type=float, default=1.5, help="seconds between requests (plus jitter)")
 
     sub.add_parser("status")
     args = ap.parse_args()

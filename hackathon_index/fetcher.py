@@ -21,7 +21,7 @@ BACKOFF = [60, 120, 300, 600]
 
 
 class Fetcher:
-    def __init__(self, conn: sqlite3.Connection, raw_dir: Path, min_interval: float = 4.0):
+    def __init__(self, conn: sqlite3.Connection, raw_dir: Path, min_interval: float = 1.5):
         self.conn = conn
         self.raw_dir = raw_dir
         self.min_interval = min_interval
@@ -75,7 +75,7 @@ class Fetcher:
         return None
 
     def _pace(self) -> None:
-        delay = self.min_interval + random.uniform(0, 1.5) - (time.monotonic() - self._last)
+        delay = self.min_interval + random.uniform(0, 0.5) - (time.monotonic() - self._last)
         if delay > 0:
             time.sleep(delay)
         self._last = time.monotonic()

@@ -10,10 +10,10 @@ Collect first, parse in detail later. Every fetched page is saved gzipped under 
 
 | Stage | Fetches | Which events |
 |---|---|---|
-| `list` | Devpost's listing JSON, 9 events per request | every ended event; keeps those that closed on or after `--since` |
+| `list` | Devpost's listing JSON, 40 events per request | every ended event; keeps those that closed on or after `--since` |
 | `overview` | the event page (prize blocks and judges) | in-window, not invite-only, with any cash prize |
 | `gallery` | every gallery page (all submission cards) | winners announced, and estimated cash ≥ `--min-cash` (or a low-confidence estimate whose headline clears it) |
-| `projects` | full project pages | all winners, plus `--loser-rate` (min `--min-losers`) of non-winners per event, using a fixed random seed |
+| `projects` | full project pages | all winners; optionally `--loser-rate` (min `--min-losers`) of non-winners per event, using a fixed random seed |
 
 The filters are loose on purpose, so small events that are real aren't dropped. Deciding which events are junk is a scoring step on the stored data.
 
@@ -21,9 +21,11 @@ The cash estimate is rough. A prize block labelled "$X in cash" counts as cash. 
 
 ## Pacing
 
-The crawler makes one request every `--interval` seconds (default 4) plus up to 1.5 s of random jitter. It backs off for 1, 2, 5, then 10 minutes on 429 or 5xx responses, honouring `Retry-After`. It runs one connection at a time with an honest user agent. Press Ctrl-C at any point and re-run the same command to resume.
+The crawler makes one request every `--interval` seconds (default 1.5) plus up to 0.5 s of random jitter, over a single connection. It backs off for 1, 2, 5, then 10 minutes on 429 or 5xx responses, honouring `Retry-After`. If backoffs show up often, raise `--interval`. Press Ctrl-C at any point and re-run the same command to resume.
 
-Rough volume for 2024 onward: about 1,550 listing requests, a few thousand overview pages, then gallery and project pages for the qualifying events. Expect about 20k requests in total, or one to two nights at the default pace.
+Do winners first, losers later. By default, `projects` fetches winners only. Every submission's title, tagline, likes, and team already come from the gallery cards. To fetch full pages for a sample of non-winners, run a second pass, for example `crawl projects --loser-rate 0.1 --min-losers 5`. Cached pages are skipped.
+
+Rough volume for 2024 onward with winners only: about 350 listing requests, a few thousand overview pages, then gallery and winner pages, roughly 15k requests in total. That's around 6–7 hours at the default pace.
 
 ## Run
 
@@ -33,7 +35,7 @@ pip install -e ".[dev]"
 pytest -q
 
 # Pilot: first 30 listing pages, then the 10 most recent qualifying events
-python -m hackathon_index crawl list --max-list-pages 30
+python -m hackathon_index crawl list --max-list-pages 8
 python -m hackathon_index crawl overview --limit 10
 python -m hackathon_index crawl gallery  --limit 10
 python -m hackathon_index crawl projects --limit 10
@@ -41,6 +43,9 @@ python -m hackathon_index status
 
 # Full backfill (overnight)
 caffeinate -i python -m hackathon_index crawl all --since 2024-01-01   # macOS: keep the laptop awake
+
+# Later: full pages for a sample of non-winners
+python -m hackathon_index crawl projects --loser-rate 0.1 --min-losers 5
 ```
 
 Everything lands in `data/index.db` (SQLite). Open it with `sqlite3`, DB Browser for SQLite, or Datasette.
