@@ -13,7 +13,7 @@ Collect first, parse in detail later. Every fetched page is saved gzipped under 
 | `list` | Devpost's listing JSON, 40 events per request | every ended event; keeps those that closed on or after `--since` |
 | `overview` | the event page (prize blocks and judges) | in-window, not invite-only, with any cash prize |
 | `gallery` | every gallery page (all submission cards) | winners announced, and estimated cash ≥ `--min-cash` (or a low-confidence estimate whose headline clears it) |
-| `projects` | full project pages | all winners; optionally `--loser-rate` (min `--min-losers`) of non-winners per event, using a fixed random seed |
+| `projects` | full project pages | all winners; optionally `--loser-rate` of non-winners per event, clamped to `--min-losers`..`--max-losers` (default cap 40): the `--top-liked` most-liked ones, then a seeded random draw |
 
 The filters are loose on purpose, so small events that are real aren't dropped. Deciding which events are junk is a scoring step on the stored data.
 
@@ -28,7 +28,7 @@ The crawler makes one request every `--interval` seconds (default 1.5) plus up t
 - **Halt instead of hammering.** If 3 URLs in a row fail even after all retries (offline, or blocked), the run stops cleanly.
 - **Resume.** Every page is cached the moment it arrives, and each stage skips work that's already done. Re-running after a crash, Ctrl-C, or halt picks up where it stopped. Failed URLs are tried again, while final answers like 404 are not. Use `--reparse` to re-run parsers over the cached pages.
 
-Do winners first, losers later. By default, `projects` fetches winners only. Every submission's title, tagline, likes, and team already come from the gallery cards. To fetch full pages for a sample of non-winners, run a second pass, for example `crawl projects --loser-rate 0.1 --min-losers 5`. Cached pages are skipped.
+Do winners first, losers later. By default, `projects` fetches winners only. Every submission's title, tagline, likes, and team already come from the gallery cards. To fetch full pages for a sample of non-winners, run a second pass, for example `crawl projects --loser-rate 0.1 --min-losers 5`. The cap matters for huge events: a 600-submission event gets 40, not 60. Of those 40, the 10 most-liked are near-miss candidates and the rest are random, so the sample isn't only popular projects. Cached pages are skipped.
 
 Rough volume for 2024 onward with winners only: about 350 listing requests, a few thousand overview pages, then gallery and winner pages, roughly 15k requests in total. That's around 6–7 hours at the default pace.
 

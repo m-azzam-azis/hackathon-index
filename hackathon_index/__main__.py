@@ -27,6 +27,8 @@ def main() -> None:
     c.add_argument("--max-list-pages", type=int, help="stop the listing early (pilot runs)")
     c.add_argument("--loser-rate", type=float, default=0.0, help="share of non-winners to fetch in full (0 = winners only)")
     c.add_argument("--min-losers", type=int, default=0, help="at least this many non-winners per event")
+    c.add_argument("--max-losers", type=int, default=40, help="at most this many non-winners per event")
+    c.add_argument("--top-liked", type=int, default=10, help="of the sampled non-winners, this many are the most-liked")
     c.add_argument("--interval", type=float, default=1.5, help="seconds between requests (plus jitter)")
     c.add_argument("--reparse", action="store_true", help="re-parse already processed pages (from cache)")
 
@@ -48,7 +50,8 @@ def main() -> None:
             elif stage == "gallery":
                 crawl.crawl_galleries(conn, fetcher, args.min_cash, args.limit, args.reparse)
             elif stage == "projects":
-                crawl.crawl_projects(conn, fetcher, args.loser_rate, args.min_losers, args.limit,
+                crawl.crawl_projects(conn, fetcher, args.loser_rate, args.min_losers, args.max_losers,
+                                     args.top_liked, args.limit,
                                      reparse=args.reparse)
     except KeyboardInterrupt:
         print("\nstopped; everything fetched so far is saved. Re-run the same command to resume.")

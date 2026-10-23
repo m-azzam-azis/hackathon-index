@@ -111,19 +111,27 @@ def crawl_galleries(conn, fetcher: Fetcher, min_cash: float, limit: int | None =
         print(f"  gallery {i}/{len(rows)} {h['title']}: {rank} submissions", flush=True)
 
 
-def crawl_projects(conn, fetcher: Fetcher, loser_rate: float, min_losers: int,
-                   limit: int | None = None, seed: int = 42, reparse: bool = False) -> None:
+def crawl_projects(conn, fetcher: Fetcher, loser_rate: float, min_losers: int, max_losers: int = 40,
+                   top_liked: int = 10, limit: int | None = None, seed: int = 42,
+                   reparse: bool = False) -> None:
+    """Winners, plus per event: rate x non-winners, clamped to [min_losers, max_losers].
+    The first `top_liked` of those are the most-liked non-winners (near-miss candidates);
+    the rest are a seeded random draw, so the sample isn't only popular projects."""
     hackathons = _targets(conn, "submissions_count > 0", limit)
     rng = random.Random(seed)  # same sample on every run, so resuming is stable
     todo: list[int] = []
     for h in hackathons:
         subs = conn.execute(
-            "SELECT project_id, is_winner FROM submissions WHERE hackathon_id=? ORDER BY gallery_rank",
+            "SELECT s.project_id, s.is_winner, COALESCE(p.likes, 0) AS likes FROM submissions s "
+            "JOIN projects p ON p.id = s.project_id WHERE s.hackathon_id=? ORDER BY s.gallery_rank",
             (h["id"],)).fetchall()
         winners = [s["project_id"] for s in subs if s["is_winner"]]
-        losers = [s["project_id"] for s in subs if not s["is_winner"]]
-        k = min(len(losers), max(min_losers, round(len(losers) * loser_rate)))
-        todo += winners + rng.sample(losers, k)
+        losers = [s for s in subs if not s["is_winner"]]
+        k = 0 if loser_rate <= 0 and min_losers <= 0 else \
+            min(len(losers), max_losers, max(min_losers, round(len(losers) * loser_rate)))
+        liked = [s["project_id"] for s in sorted(losers, key=lambda s: -s["likes"])[:min(top_liked, k)]]
+        rest = [s["project_id"] for s in losers if s["project_id"] not in set(liked)]
+        todo += winners + liked + rng.sample(rest, k - len(liked))
 
     seen, ordered = set(), []
     for pid in todo:

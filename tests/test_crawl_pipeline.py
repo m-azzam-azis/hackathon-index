@@ -50,3 +50,24 @@ def test_pipeline(tmp_path):
     assert q("SELECT COUNT(*) FROM projects WHERE detail_fetched = 1")[0][0] == 2
     assert q("SELECT prize_title FROM submission_prizes")[0][0] == "Best Use of Neo4j"
     assert q("SELECT COUNT(*) FROM people")[0][0] == 4
+
+
+def test_loser_sample_is_capped_and_includes_most_liked(tmp_path):
+    conn = connect(tmp_path / "index.db")
+    conn.execute("INSERT INTO hackathons (id, source, source_id, url, submissions_count) "
+                 "VALUES (1, 'devpost', '1', 'https://big.devpost.com/', 601)")
+    for i in range(601):
+        conn.execute("INSERT INTO projects (id, source, url, likes) VALUES (?, 'devpost', ?, ?)",
+                     (i, f"https://devpost.com/software/p{i}", i))
+        conn.execute("INSERT INTO submissions VALUES (1, ?, ?, ?)", (i, i, int(i == 0)))
+    fetched = []
+
+    class Recorder:
+        def get(self, url, source, kind, refresh=False):
+            fetched.append(url)
+            return None
+
+    crawl.crawl_projects(conn, Recorder(), loser_rate=0.15, min_losers=5, max_losers=40, top_liked=10)
+    assert len(fetched) == 41  # 1 winner + 40 losers, not 90
+    most_liked = {f"https://devpost.com/software/p{i}" for i in range(591, 601)}
+    assert most_liked <= set(fetched)
