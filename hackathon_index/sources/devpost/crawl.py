@@ -9,6 +9,7 @@
 import json
 import random
 import sqlite3
+from datetime import date, timedelta
 
 from ...db import upsert
 from ...fetcher import Fetcher
@@ -19,11 +20,15 @@ SOURCE = parse.SOURCE
 LIST_URL = "https://devpost.com/api/hackathons?status[]=ended&per_page=40&page={page}"  # 40 is the max
 
 
-def crawl_list(conn: sqlite3.Connection, fetcher: Fetcher, since: str, max_pages: int | None = None) -> None:
-    page, kept, prog = 1, 0, None
+def crawl_list(conn: sqlite3.Connection, fetcher: Fetcher, since: str, max_pages: int | None = None,
+               refresh_days: int = 60) -> None:
+    """Walk every listing page. Pages are cached, but the front of the list shifts as events
+    end and winners get announced, so pages are re-fetched for as long as they still hold
+    events that ended within `refresh_days` (the listing is roughly newest first)."""
+    recent_cutoff = (date.today() - timedelta(days=refresh_days)).isoformat()
+    page, kept, prog, refreshing = 1, 0, None, True
     while max_pages is None or page <= max_pages:
-        # The first pages change as events end, so always refresh page 1..3.
-        body = fetcher.get(LIST_URL.format(page=page), SOURCE, "list", refresh=page <= 3)
+        body = fetcher.get(LIST_URL.format(page=page), SOURCE, "list", refresh=refreshing)
         if body is None:
             print(f"  list page {page}: no body, stopping")
             break
@@ -34,8 +39,9 @@ def crawl_list(conn: sqlite3.Connection, fetcher: Fetcher, since: str, max_pages
             prog = Progress("list", min(pages, max_pages or pages), fetcher)
         if not items:
             break
-        for h in items:
-            row = parse.parse_listing_item(h)
+        rows = [parse.parse_listing_item(h) for h in items]
+        refreshing = refreshing and any(r["end_date"] and r["end_date"] >= recent_cutoff for r in rows)
+        for h, row in zip(items, rows):
             if row["end_date"] and row["end_date"] >= since:
                 row["raw"] = json.dumps(h)
                 upsert(conn, "hackathons", row, ("source", "source_id"))

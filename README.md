@@ -54,6 +54,14 @@ Later, to get full pages for a sample of non-winners:
 ./run.sh --loser-rate 0.15 --min-losers 5
 ```
 
+Going further back, or keeping it up to date:
+
+```bash
+./run.sh --since 2022-01-01   # add older events; the listing is cached, so old pages aren't re-fetched
+./run.sh                      # monthly: re-fetches listing pages with events from the last 60 days
+                              # (--refresh-days), then crawls new events and newly announced winners
+```
+
 Manual equivalent: `python -m hackathon_index crawl {list,overview,gallery,projects,all} [options]`, then `pytest -q` for the tests.
 
 Everything lands in `data/index.db` (SQLite). Open it with `sqlite3`, DB Browser for SQLite, or Datasette.

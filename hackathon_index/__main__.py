@@ -25,6 +25,8 @@ def main() -> None:
     c.add_argument("--min-cash", type=float, default=1000, help="USD cash needed to crawl the gallery")
     c.add_argument("--limit", type=int, help="only the N most recent qualifying hackathons (pilot runs)")
     c.add_argument("--max-list-pages", type=int, help="stop the listing early (pilot runs)")
+    c.add_argument("--refresh-days", type=int, default=60,
+                   help="re-fetch listing pages holding events that ended within this many days")
     c.add_argument("--loser-rate", type=float, default=0.0, help="share of non-winners to fetch in full (0 = winners only)")
     c.add_argument("--min-losers", type=int, default=0, help="at least this many non-winners per event")
     c.add_argument("--max-losers", type=int, default=40, help="at most this many non-winners per event")
@@ -44,7 +46,7 @@ def main() -> None:
     try:
         for stage in stages:
             if stage == "list":
-                crawl.crawl_list(conn, fetcher, args.since, args.max_list_pages)
+                crawl.crawl_list(conn, fetcher, args.since, args.max_list_pages, args.refresh_days)
             elif stage == "overview":
                 crawl.crawl_overviews(conn, fetcher, args.limit, args.reparse)
             elif stage == "gallery":

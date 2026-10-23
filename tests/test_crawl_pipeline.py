@@ -71,3 +71,26 @@ def test_loser_sample_is_capped_and_includes_most_liked(tmp_path):
     assert len(fetched) == 41  # 1 winner + 40 losers, not 90
     most_liked = {f"https://devpost.com/software/p{i}" for i in range(591, 601)}
     assert most_liked <= set(fetched)
+
+
+def test_listing_refreshes_only_while_pages_hold_recent_events(tmp_path):
+    from datetime import date, timedelta
+    recent = (date.today() - timedelta(days=5)).strftime("%b %d, %Y")
+    old = "Mar 01, 2024"
+    pages = {1: recent, 2: old, 3: old}
+    seen = []
+
+    class ListStub:
+        def get(self, url, source, kind, refresh=False):
+            page = int(url.rsplit("=", 1)[1])
+            seen.append((page, refresh))
+            if page not in pages:
+                return json.dumps({"hackathons": []})
+            return json.dumps({"meta": {"total_count": 120}, "hackathons": [
+                {"id": page, "title": f"e{page}", "url": f"https://e{page}.devpost.com/",
+                 "submission_period_dates": pages[page]}]})
+
+    conn = connect(tmp_path / "index.db")
+    crawl.crawl_list(conn, ListStub(), since="2024-01-01", refresh_days=60)
+    assert seen[:3] == [(1, True), (2, True), (3, False)]  # page 2 is checked, then caching resumes
+    assert conn.execute("SELECT COUNT(*) FROM hackathons").fetchone()[0] == 3
