@@ -132,7 +132,6 @@ def crawl_projects(conn, fetcher: Fetcher, loser_rate: float, min_losers: int, m
     The first `top_liked` of those are the most-liked non-winners (near-miss candidates);
     the rest are a seeded random draw, so the sample isn't only popular projects."""
     hackathons = _targets(conn, "submissions_count > 0", limit)
-    rng = random.Random(seed)  # same sample on every run, so resuming is stable
     todo: list[int] = []
     for h in hackathons:
         subs = conn.execute(
@@ -143,9 +142,14 @@ def crawl_projects(conn, fetcher: Fetcher, loser_rate: float, min_losers: int, m
         losers = [s for s in subs if not s["is_winner"]]
         k = 0 if loser_rate <= 0 and min_losers <= 0 else \
             min(len(losers), max_losers, max(min_losers, round(len(losers) * loser_rate)))
-        liked = [s["project_id"] for s in sorted(losers, key=lambda s: -s["likes"])[:min(top_liked, k)]]
-        rest = [s["project_id"] for s in losers if s["project_id"] not in set(liked)]
-        todo += winners + liked + rng.sample(rest, k - len(liked))
+        # Ties broken by project id, and the random part comes from one shuffle seeded per
+        # event: the same event always yields the same sample, other events don't affect it,
+        # and raising the cap later only adds projects (never swaps them).
+        liked = [s["project_id"] for s in sorted(losers, key=lambda s: (-s["likes"], s["project_id"]))
+                 [:min(top_liked, k)]]
+        rest = sorted(s["project_id"] for s in losers if s["project_id"] not in set(liked))
+        random.Random(f"{seed}:{h['source']}:{h['source_id']}").shuffle(rest)
+        todo += winners + liked + rest[:k - len(liked)]
 
     seen, ordered = set(), []
     for pid in todo:

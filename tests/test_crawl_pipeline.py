@@ -94,3 +94,34 @@ def test_listing_refreshes_only_while_pages_hold_recent_events(tmp_path):
     crawl.crawl_list(conn, ListStub(), since="2024-01-01", refresh_days=60)
     assert seen[:3] == [(1, True), (2, True), (3, False)]  # page 2 is checked, then caching resumes
     assert conn.execute("SELECT COUNT(*) FROM hackathons").fetchone()[0] == 3
+
+
+def test_loser_sample_is_stable_across_runs_and_new_events(tmp_path):
+    conn = connect(tmp_path / "index.db")
+
+    def add_event(hid, n):
+        conn.execute("INSERT INTO hackathons (id, source, source_id, url, submissions_count, end_date) "
+                     "VALUES (?, 'devpost', ?, ?, ?, ?)", (hid, str(hid), f"https://e{hid}.devpost.com/", n,
+                                                          f"2025-0{hid}-01"))
+        for i in range(n):
+            pid = hid * 1000 + i
+            conn.execute("INSERT INTO projects (id, source, url, likes) VALUES (?, 'devpost', ?, 0)",
+                         (pid, f"https://devpost.com/software/{pid}"))
+            conn.execute("INSERT INTO submissions VALUES (?, ?, ?, ?)", (hid, pid, i, int(i == 0)))
+
+    def sample(**kw):
+        got = []
+
+        class Recorder:
+            def get(self, url, source, kind, refresh=False):
+                got.append(url)
+
+        crawl.crawl_projects(conn, Recorder(), loser_rate=0.1, min_losers=5, top_liked=0, **kw)
+        return set(got)
+
+    add_event(1, 200)
+    first = sample(max_losers=20)
+    assert sample(max_losers=20) == first                      # same run twice: same pool
+    add_event(2, 200)                                          # a newer event appears (monthly run)
+    assert {u for u in sample(max_losers=20) if u.rsplit("/", 1)[1].startswith("1")} == first
+    assert first <= sample(max_losers=30)                      # raising the cap only adds
