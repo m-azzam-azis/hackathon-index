@@ -43,7 +43,8 @@ def crawl_list(conn: sqlite3.Connection, fetcher: Fetcher, since: str, max_pages
 
 
 def _targets(conn, where: str, limit: int | None, params=()) -> list[sqlite3.Row]:
-    sql = f"SELECT * FROM hackathons WHERE source=? AND {where} ORDER BY end_date DESC"
+    # Events with winners first, so a --limit pilot reaches the gallery stage.
+    sql = f"SELECT * FROM hackathons WHERE source=? AND {where} ORDER BY winners_announced DESC, end_date DESC"
     rows = conn.execute(sql, (SOURCE, *params)).fetchall()
     return rows[:limit] if limit else rows
 
