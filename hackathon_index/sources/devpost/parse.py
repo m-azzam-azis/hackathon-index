@@ -156,7 +156,10 @@ def parse_gallery(html: str) -> dict:
         })
     nxt = soup.select_one(".pagination .next_page")
     has_next = bool(nxt and "unavailable" not in (nxt.get("class") or []))
-    return {"entries": entries, "has_next": has_next}
+    # The gallery's "filter by prize" checkboxes; values match the prize blocks' ids.
+    filter_ids = list(dict.fromkeys(i.get("value") for i in soup.select('input[name="prize_filter[prizes][]"]')
+                                    if i.get("value")))
+    return {"entries": entries, "has_next": has_next, "prize_filter_ids": filter_ids}
 
 
 # ---------------------------------------------------------------- project page

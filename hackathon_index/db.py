@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS hackathons (
     cash_prizes_count   INTEGER,
     other_prizes_count  INTEGER,
     judges_count        INTEGER,
+    categories_done     INTEGER,        -- categories recorded; NULL = category pass not done
     cash_usd_est        REAL,           -- rough, from prize blocks; refined later
     cash_confidence     TEXT,           -- high | low
     raw                 TEXT,           -- listing JSON
@@ -105,6 +106,14 @@ CREATE TABLE IF NOT EXISTS submission_prizes (
     PRIMARY KEY (hackathon_id, project_id, prize_title)
 );
 
+-- Which submissions entered which prize/category (from per-prize filtered galleries).
+CREATE TABLE IF NOT EXISTS submission_categories (
+    hackathon_id  INTEGER NOT NULL REFERENCES hackathons(id),
+    project_id    INTEGER NOT NULL REFERENCES projects(id),
+    prize_id      INTEGER NOT NULL REFERENCES prizes(id),
+    PRIMARY KEY (hackathon_id, project_id, prize_id)
+);
+
 CREATE TABLE IF NOT EXISTS people (
     id           INTEGER PRIMARY KEY,
     source       TEXT NOT NULL,
@@ -121,14 +130,29 @@ CREATE TABLE IF NOT EXISTS project_members (
 """
 
 
-def connect(path: Path) -> sqlite3.Connection:
+def connect(path: Path, threads: bool = False) -> sqlite3.Connection:
+    """`threads=True` for the fetcher's own connection, shared by worker threads under its lock."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, timeout=30, check_same_thread=not threads)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+# Columns added after the first release; ALTER TABLE for databases created before them.
+_ADDED_COLUMNS = {"hackathons": {"categories_done": "INTEGER"}}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, cols in _ADDED_COLUMNS.items():
+        have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for col, kind in cols.items():
+            if col not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {kind}")
+    conn.commit()
 
 
 def upsert(conn: sqlite3.Connection, table: str, row: dict, keys: tuple[str, ...]) -> int:

@@ -8,12 +8,18 @@ between requests (up to MAX_INTERVAL), and each streak of successes eases it bac
 toward `min_interval`. If several URLs in a row fail even after all retries (offline,
 or blocked), the run stops with `CrawlHalted`; re-running resumes where it left off,
 and failed URLs are retried because only final statuses (200, 404, ...) count as done.
+
+Thread-safe: with `workers` > 1, several threads call `get` at once. Request starts are
+spaced globally by interval / workers, so each worker effectively keeps `interval`, and
+one slowdown applies to all of them. Give the fetcher its own connection opened with
+check_same_thread=False; all its DB access is serialised by a lock.
 """
 
 import gzip
 import hashlib
 import random
 import sqlite3
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,13 +38,21 @@ class CrawlHalted(RuntimeError):
     pass
 
 
+class Stopped(RuntimeError):
+    """Raised inside workers after stop() so they abandon backoff sleeps promptly."""
+
+
 class Fetcher:
-    def __init__(self, conn: sqlite3.Connection, raw_dir: Path, min_interval: float = 0.5):
+    def __init__(self, conn: sqlite3.Connection, raw_dir: Path, min_interval: float = 0.5,
+                 workers: int = 1):
         self.conn = conn
         self.raw_dir = raw_dir
         self.min_interval = min_interval
         self.interval = min_interval
-        self._last = 0.0
+        self.workers = max(1, workers)
+        self._lock = threading.RLock()
+        self._stop = threading.Event()
+        self._next_slot = 0.0
         self._ok_streak = 0
         self._dead_streak = 0
         self.requests = 0
@@ -49,15 +63,20 @@ class Fetcher:
             follow_redirects=True,
         )
 
+    def stop(self) -> None:
+        self._stop.set()
+
     def cached(self, url: str) -> str | None:
-        row = self.conn.execute("SELECT status, path FROM pages WHERE url=?", (url,)).fetchone()
+        with self._lock:
+            row = self.conn.execute("SELECT status, path FROM pages WHERE url=?", (url,)).fetchone()
         if row and row["status"] == 200 and row["path"] and Path(row["path"]).exists():
             return gzip.decompress(Path(row["path"]).read_bytes()).decode("utf-8")
         return None
 
     def seen(self, url: str) -> bool:
         """True if fetched before with a final (non-retryable) status, e.g. 200 or 404."""
-        row = self.conn.execute("SELECT status FROM pages WHERE url=?", (url,)).fetchone()
+        with self._lock:
+            row = self.conn.execute("SELECT status FROM pages WHERE url=?", (url,)).fetchone()
         return bool(row and row["status"] and row["status"] not in RETRY_STATUSES)
 
     def get(self, url: str, source: str, kind: str, refresh: bool = False) -> str | None:
@@ -70,7 +89,8 @@ class Fetcher:
 
         for attempt in range(len(BACKOFF) + 1):
             self._pace()
-            self.requests += 1
+            with self._lock:
+                self.requests += 1
             try:
                 resp = self.client.get(url)
             except httpx.HTTPError as exc:
@@ -87,34 +107,49 @@ class Fetcher:
                 wait = _retry_after(resp) or BACKOFF[min(attempt, len(BACKOFF) - 1)]
                 error = f"HTTP {status}"
             self._slow_down()
-            self.retries += 1
             if attempt < len(BACKOFF):
                 print(f"\n  ! {error} on {url}; sleeping {wait}s, then pacing at {self.interval:.1f}s", flush=True)
-                time.sleep(wait)
+                self._sleep(wait)
 
         self._record(url, source, kind, status, None, error)
-        self._dead_streak += 1
-        if self._dead_streak >= HALT_AFTER:
+        with self._lock:
+            self._dead_streak += 1
+            dead = self._dead_streak
+        if dead >= HALT_AFTER:
             raise CrawlHalted(f"{HALT_AFTER} URLs in a row failed after all retries (last: {error}). "
                               "Offline or blocked? Re-run later to resume.")
         return None
 
     def _succeeded(self) -> None:
-        self._dead_streak = 0
-        self._ok_streak += 1
-        if self._ok_streak >= EASE_AFTER and self.interval > self.min_interval:
-            self.interval = max(self.min_interval, self.interval * 0.8)
-            self._ok_streak = 0
+        with self._lock:
+            self._dead_streak = 0
+            self._ok_streak += 1
+            if self._ok_streak >= EASE_AFTER and self.interval > self.min_interval:
+                self.interval = max(self.min_interval, self.interval * 0.8)
+                self._ok_streak = 0
 
     def _slow_down(self) -> None:
-        self._ok_streak = 0
-        self.interval = min(MAX_INTERVAL, self.interval * 2)
+        with self._lock:
+            self._ok_streak = 0
+            self.retries += 1
+            self.interval = min(MAX_INTERVAL, self.interval * 2)
 
     def _pace(self) -> None:
-        delay = self.interval + random.uniform(0, 0.3) - (time.monotonic() - self._last)
-        if delay > 0:
-            time.sleep(delay)
-        self._last = time.monotonic()
+        if self._stop.is_set():
+            raise Stopped()
+        with self._lock:
+            now = time.monotonic()
+            start = max(now, self._next_slot)
+            self._next_slot = start + (self.interval + random.uniform(0, 0.3)) / self.workers
+        if start > now:
+            time.sleep(start - now)
+
+    def _sleep(self, seconds: float) -> None:
+        """Backoff sleep in 1s steps so stop() (Ctrl-C) interrupts it."""
+        for i in range(int(seconds + 0.999)):
+            if self._stop.is_set():
+                raise Stopped()
+            time.sleep(min(1, seconds - i))
 
     def _store(self, url: str, source: str, content: bytes) -> str:
         digest = hashlib.sha1(url.encode()).hexdigest()
@@ -124,6 +159,10 @@ class Fetcher:
         return str(path)
 
     def _record(self, url, source, kind, status, path, error=None) -> None:
+        with self._lock:
+            self._record_locked(url, source, kind, status, path, error)
+
+    def _record_locked(self, url, source, kind, status, path, error) -> None:
         self.conn.execute(
             "INSERT INTO pages (url, source, kind, status, fetched_at, path, error) "
             "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (url) DO UPDATE SET "

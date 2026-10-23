@@ -13,7 +13,10 @@ Collect first, parse in detail later. Every fetched page is saved gzipped under 
 | `list` | Devpost's listing JSON, 40 events per request | every ended event; keeps those that closed on or after `--since` |
 | `overview` | the event page (prize blocks and judges) | in-window, not invite-only, with any cash prize |
 | `gallery` | every gallery page (all submission cards) | winners announced, and estimated cash ≥ `--min-cash` (or a low-confidence estimate whose headline clears it) |
-| `projects` | full project pages | all winners; optionally `--loser-rate` of non-winners per event, clamped to `--min-losers`..`--max-losers` (default cap 40): the `--top-liked` most-liked ones, then a seeded random draw |
+| `categories` | per-prize filtered galleries (`/submissions/search?prize_filter…`), up to `--category-pages` pages each | events with ≥ `--min-submissions` submissions whose gallery has a prize filter; runs with the non-winner pass |
+| `projects` | full project pages | all winners; optionally `--loser-rate` of non-winners per event (events with ≥ `--min-submissions`), clamped to `--min-losers`..`--max-losers` (default cap 40) |
+
+The non-winner sample is picked in priority order: the `--top-liked` most-liked (near-miss candidates), then round-robin across categories so every category is represented, then a seeded random fill. It's deterministic: the same event always gives the same picks, new events don't change old ones, and raising the cap only adds projects. The ordering uses project URLs, so even a rebuilt database picks the same ones.
 
 The filters are loose on purpose, so small events that are real aren't dropped. Deciding which events are junk is a scoring step on the stored data.
 
@@ -21,10 +24,10 @@ The cash estimate is rough. A prize block labelled "$X in cash" counts as cash. 
 
 ## Pacing
 
-The crawler starts fast and only slows down when Devpost pushes back. It makes one request every `--interval` seconds (default 0.5) plus up to 0.3 s of random jitter, over a single connection.
+The crawler starts fast and only slows down when Devpost pushes back. By default it runs `--workers 3` in parallel, each making one request every `--interval` seconds (default 0.5) plus up to 0.3 s of random jitter. That's roughly 3x the single-worker speed. Use `--workers 1` for the old sequential behaviour. Threads only fetch and parse, and all database writes happen on the main thread. A lock file stops two crawls running on the same data folder at once.
 
 - **Auto retry.** A 429, 403, 5xx, timeout, or network error is retried up to 4 times, waiting 1, 2, 5, then 10 minutes, and honouring `Retry-After`.
-- **Adaptive pacing.** Each retryable failure doubles the gap between requests, up to 30 s. Every 50 successes in a row eases it back toward `--interval`.
+- **Adaptive pacing.** Each retryable failure doubles the gap between requests, up to 30 s. The slowdown is shared, so all workers slow down together. Every 50 successes in a row eases it back toward `--interval`.
 - **Halt instead of hammering.** If 3 URLs in a row fail even after all retries (offline, or blocked), the run stops cleanly.
 - **Resume.** Every page is cached the moment it arrives, and each stage skips work that's already done. Re-running after a crash, Ctrl-C, or halt picks up where it stopped. Failed URLs are tried again, while final answers like 404 are not. Use `--reparse` to re-run parsers over the cached pages.
 
@@ -48,10 +51,10 @@ On macOS it keeps the laptop awake while running. Each stage prints one live lin
 
 If `pace` climbs above 0.5s, Devpost is pushing back and the crawler has slowed itself down.
 
-Later, to get full pages for a sample of non-winners:
+Later, to get full pages for a sample of non-winners, balanced across categories:
 
 ```bash
-./run.sh --loser-rate 0.15 --min-losers 5
+./run.sh --loser-rate 0.15 --min-losers 5   # also runs the category pass first
 ```
 
 Going further back, or keeping it up to date:
