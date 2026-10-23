@@ -29,7 +29,7 @@ def main() -> None:
     c.add_argument("--min-losers", type=int, default=0, help="at least this many non-winners per event")
     c.add_argument("--max-losers", type=int, default=40, help="at most this many non-winners per event")
     c.add_argument("--top-liked", type=int, default=10, help="of the sampled non-winners, this many are the most-liked")
-    c.add_argument("--interval", type=float, default=1.5, help="seconds between requests (plus jitter)")
+    c.add_argument("--interval", type=float, default=0.5, help="seconds between requests (plus jitter)")
     c.add_argument("--reparse", action="store_true", help="re-parse already processed pages (from cache)")
 
     sub.add_parser("status")

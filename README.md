@@ -21,7 +21,7 @@ The cash estimate is rough. A prize block labelled "$X in cash" counts as cash. 
 
 ## Pacing
 
-The crawler makes one request every `--interval` seconds (default 1.5) plus up to 0.5 s of random jitter, over a single connection.
+The crawler starts fast and only slows down when Devpost pushes back. It makes one request every `--interval` seconds (default 0.5) plus up to 0.3 s of random jitter, over a single connection.
 
 - **Auto retry.** A 429, 403, 5xx, timeout, or network error is retried up to 4 times, waiting 1, 2, 5, then 10 minutes, and honouring `Retry-After`.
 - **Adaptive pacing.** Each retryable failure doubles the gap between requests, up to 30 s. Every 50 successes in a row eases it back toward `--interval`.
@@ -30,28 +30,31 @@ The crawler makes one request every `--interval` seconds (default 1.5) plus up t
 
 Do winners first, losers later. By default, `projects` fetches winners only. Every submission's title, tagline, likes, and team already come from the gallery cards. To fetch full pages for a sample of non-winners, run a second pass, for example `crawl projects --loser-rate 0.1 --min-losers 5`. The cap matters for huge events: a 600-submission event gets 40, not 60. Of those 40, the 10 most-liked are near-miss candidates and the rest are random, so the sample isn't only popular projects. Cached pages are skipped.
 
-Rough volume for 2024 onward with winners only: about 350 listing requests, a few thousand overview pages, then gallery and winner pages, roughly 15k requests in total. That's around 6–7 hours at the default pace.
+Rough volume for 2024 onward with winners only: about 350 listing requests, a few thousand overview pages, then gallery and winner pages, roughly 15k requests in total. That's around 3 hours if Devpost never pushes back, longer if it does.
 
 ## Run
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-pytest -q
-
-# Pilot: first 30 listing pages, then the 10 most recent qualifying events
-python -m hackathon_index crawl list --max-list-pages 8
-python -m hackathon_index crawl overview --limit 10
-python -m hackathon_index crawl gallery  --limit 10
-python -m hackathon_index crawl projects --limit 10
-python -m hackathon_index status
-
-# Full backfill (overnight)
-caffeinate -i python -m hackathon_index crawl all --since 2024-01-01   # macOS: keep the laptop awake
-
-# Later: full pages for a sample of non-winners
-python -m hackathon_index crawl projects --loser-rate 0.1 --min-losers 5
+./run.sh            # pull the latest code, set up .venv if needed, crawl every stage (resumes)
+./run.sh status     # what's collected so far
+./run.sh --limit 10 # any crawl option passes through, e.g. a pilot run
 ```
+
+On macOS it keeps the laptop awake while running. Each stage prints one live line:
+
+```
+[gallery] 112/340 (33%) · eta 41m10s · 1.4 req/s · pace 0.5s · retries 0 · AWS AI Agent Global Hackathon: 610 submissions
+```
+
+If `pace` climbs above 0.5s, Devpost is pushing back and the crawler has slowed itself down.
+
+Later, to get full pages for a sample of non-winners:
+
+```bash
+./run.sh --loser-rate 0.15 --min-losers 5
+```
+
+Manual equivalent: `python -m hackathon_index crawl {list,overview,gallery,projects,all} [options]`, then `pytest -q` for the tests.
 
 Everything lands in `data/index.db` (SQLite). Open it with `sqlite3`, DB Browser for SQLite, or Datasette.
 

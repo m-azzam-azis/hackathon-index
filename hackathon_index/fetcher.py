@@ -33,7 +33,7 @@ class CrawlHalted(RuntimeError):
 
 
 class Fetcher:
-    def __init__(self, conn: sqlite3.Connection, raw_dir: Path, min_interval: float = 1.5):
+    def __init__(self, conn: sqlite3.Connection, raw_dir: Path, min_interval: float = 0.5):
         self.conn = conn
         self.raw_dir = raw_dir
         self.min_interval = min_interval
@@ -41,6 +41,8 @@ class Fetcher:
         self._last = 0.0
         self._ok_streak = 0
         self._dead_streak = 0
+        self.requests = 0
+        self.retries = 0
         self.client = httpx.Client(
             headers={"User-Agent": USER_AGENT, "Accept-Language": "en"},
             timeout=30,
@@ -68,6 +70,7 @@ class Fetcher:
 
         for attempt in range(len(BACKOFF) + 1):
             self._pace()
+            self.requests += 1
             try:
                 resp = self.client.get(url)
             except httpx.HTTPError as exc:
@@ -84,8 +87,9 @@ class Fetcher:
                 wait = _retry_after(resp) or BACKOFF[min(attempt, len(BACKOFF) - 1)]
                 error = f"HTTP {status}"
             self._slow_down()
+            self.retries += 1
             if attempt < len(BACKOFF):
-                print(f"  ! {error} on {url}; sleeping {wait}s, then pacing at {self.interval:.1f}s", flush=True)
+                print(f"\n  ! {error} on {url}; sleeping {wait}s, then pacing at {self.interval:.1f}s", flush=True)
                 time.sleep(wait)
 
         self._record(url, source, kind, status, None, error)
@@ -107,7 +111,7 @@ class Fetcher:
         self.interval = min(MAX_INTERVAL, self.interval * 2)
 
     def _pace(self) -> None:
-        delay = self.interval + random.uniform(0, 0.5) - (time.monotonic() - self._last)
+        delay = self.interval + random.uniform(0, 0.3) - (time.monotonic() - self._last)
         if delay > 0:
             time.sleep(delay)
         self._last = time.monotonic()
