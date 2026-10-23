@@ -22,6 +22,11 @@ class Progress:
         self.tty = sys.stdout.isatty()
         print(f"[{stage}] {total} to go", flush=True)
 
+    def update(self, label: str) -> None:
+        """Refresh the live line mid-item (e.g. page 389 of a huge gallery) without counting it."""
+        if self.tty:
+            print("\r" + self.line(label)[:160].ljust(160), end="", flush=True)
+
     def step(self, label: str = "") -> None:
         self.i += 1
         if self.tty or self.i % self.every == 0 or self.i == self.total:

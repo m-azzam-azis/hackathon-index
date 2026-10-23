@@ -110,6 +110,8 @@ def crawl_galleries(conn, fetcher: Fetcher, min_cash: float, limit: int | None =
                 complete = True
                 break
             page += 1
+            if page % 5 == 0:
+                prog.update(f"{h['title']}: page {page}, {rank} submissions so far")
         if complete:
             conn.execute("UPDATE hackathons SET submissions_count=? WHERE id=?", (rank, h["id"]))
         conn.commit()
