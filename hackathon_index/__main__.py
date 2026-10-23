@@ -8,7 +8,7 @@ import argparse
 from pathlib import Path
 
 from .db import connect
-from .fetcher import Fetcher
+from .fetcher import CrawlHalted, Fetcher
 from .sources.devpost import crawl
 
 STAGES = ("list", "overview", "gallery", "projects")
@@ -28,6 +28,7 @@ def main() -> None:
     c.add_argument("--loser-rate", type=float, default=0.0, help="share of non-winners to fetch in full (0 = winners only)")
     c.add_argument("--min-losers", type=int, default=0, help="at least this many non-winners per event")
     c.add_argument("--interval", type=float, default=1.5, help="seconds between requests (plus jitter)")
+    c.add_argument("--reparse", action="store_true", help="re-parse already processed pages (from cache)")
 
     sub.add_parser("status")
     args = ap.parse_args()
@@ -43,13 +44,16 @@ def main() -> None:
             if stage == "list":
                 crawl.crawl_list(conn, fetcher, args.since, args.max_list_pages)
             elif stage == "overview":
-                crawl.crawl_overviews(conn, fetcher, args.limit)
+                crawl.crawl_overviews(conn, fetcher, args.limit, args.reparse)
             elif stage == "gallery":
-                crawl.crawl_galleries(conn, fetcher, args.min_cash, args.limit)
+                crawl.crawl_galleries(conn, fetcher, args.min_cash, args.limit, args.reparse)
             elif stage == "projects":
-                crawl.crawl_projects(conn, fetcher, args.loser_rate, args.min_losers, args.limit)
+                crawl.crawl_projects(conn, fetcher, args.loser_rate, args.min_losers, args.limit,
+                                     reparse=args.reparse)
     except KeyboardInterrupt:
         print("\nstopped; everything fetched so far is saved. Re-run the same command to resume.")
+    except CrawlHalted as exc:
+        print(f"\nhalted: {exc}")
     status(conn)
 
 

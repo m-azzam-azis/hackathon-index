@@ -1,8 +1,13 @@
 """Polite, resumable fetcher.
 
 Every response body is cached gzipped on disk and recorded in `pages`, so a page is
-fetched once and can be re-parsed any number of times. Requests are paced
-(`min_interval` + jitter) and back off on 429/5xx, honouring Retry-After.
+fetched once and can be re-parsed any number of times.
+
+Pacing adapts: every retryable failure (429, 403, 5xx, network error) doubles the gap
+between requests (up to MAX_INTERVAL), and each streak of successes eases it back
+toward `min_interval`. If several URLs in a row fail even after all retries (offline,
+or blocked), the run stops with `CrawlHalted`; re-running resumes where it left off,
+and failed URLs are retried because only final statuses (200, 404, ...) count as done.
 """
 
 import gzip
@@ -16,8 +21,15 @@ from pathlib import Path
 import httpx
 
 USER_AGENT = "hackathon-index/0.1 (personal research crawler; slow and cached)"
-RETRY_STATUSES = {429, 500, 502, 503, 504}
+RETRY_STATUSES = {403, 408, 429, 500, 502, 503, 504}  # 403: Devpost may block before it 429s
 BACKOFF = [60, 120, 300, 600]
+MAX_INTERVAL = 30.0
+EASE_AFTER = 50          # successes in a row before easing the interval back down
+HALT_AFTER = 3           # URLs in a row that exhausted every retry
+
+
+class CrawlHalted(RuntimeError):
+    pass
 
 
 class Fetcher:
@@ -25,7 +37,10 @@ class Fetcher:
         self.conn = conn
         self.raw_dir = raw_dir
         self.min_interval = min_interval
+        self.interval = min_interval
         self._last = 0.0
+        self._ok_streak = 0
+        self._dead_streak = 0
         self.client = httpx.Client(
             headers={"User-Agent": USER_AGENT, "Accept-Language": "en"},
             timeout=30,
@@ -59,23 +74,40 @@ class Fetcher:
                 status, error, wait = None, repr(exc), BACKOFF[min(attempt, len(BACKOFF) - 1)]
             else:
                 status, error = resp.status_code, None
-                if status == 200:
-                    self._record(url, source, kind, status, self._store(url, source, resp.content))
-                    return resp.text
                 if status not in RETRY_STATUSES:
+                    self._succeeded()
+                    if status == 200:
+                        self._record(url, source, kind, status, self._store(url, source, resp.content))
+                        return resp.text
                     self._record(url, source, kind, status, None, f"HTTP {status}")
                     return None
                 wait = _retry_after(resp) or BACKOFF[min(attempt, len(BACKOFF) - 1)]
                 error = f"HTTP {status}"
+            self._slow_down()
             if attempt < len(BACKOFF):
-                print(f"  ! {error} on {url}; sleeping {wait}s", flush=True)
+                print(f"  ! {error} on {url}; sleeping {wait}s, then pacing at {self.interval:.1f}s", flush=True)
                 time.sleep(wait)
 
         self._record(url, source, kind, status, None, error)
+        self._dead_streak += 1
+        if self._dead_streak >= HALT_AFTER:
+            raise CrawlHalted(f"{HALT_AFTER} URLs in a row failed after all retries (last: {error}). "
+                              "Offline or blocked? Re-run later to resume.")
         return None
 
+    def _succeeded(self) -> None:
+        self._dead_streak = 0
+        self._ok_streak += 1
+        if self._ok_streak >= EASE_AFTER and self.interval > self.min_interval:
+            self.interval = max(self.min_interval, self.interval * 0.8)
+            self._ok_streak = 0
+
+    def _slow_down(self) -> None:
+        self._ok_streak = 0
+        self.interval = min(MAX_INTERVAL, self.interval * 2)
+
     def _pace(self) -> None:
-        delay = self.min_interval + random.uniform(0, 0.5) - (time.monotonic() - self._last)
+        delay = self.interval + random.uniform(0, 0.5) - (time.monotonic() - self._last)
         if delay > 0:
             time.sleep(delay)
         self._last = time.monotonic()

@@ -21,7 +21,12 @@ The cash estimate is rough. A prize block labelled "$X in cash" counts as cash. 
 
 ## Pacing
 
-The crawler makes one request every `--interval` seconds (default 1.5) plus up to 0.5 s of random jitter, over a single connection. It backs off for 1, 2, 5, then 10 minutes on 429 or 5xx responses, honouring `Retry-After`. If backoffs show up often, raise `--interval`. Press Ctrl-C at any point and re-run the same command to resume.
+The crawler makes one request every `--interval` seconds (default 1.5) plus up to 0.5 s of random jitter, over a single connection.
+
+- **Auto retry.** A 429, 403, 5xx, timeout, or network error is retried up to 4 times, waiting 1, 2, 5, then 10 minutes, and honouring `Retry-After`.
+- **Adaptive pacing.** Each retryable failure doubles the gap between requests, up to 30 s. Every 50 successes in a row eases it back toward `--interval`.
+- **Halt instead of hammering.** If 3 URLs in a row fail even after all retries (offline, or blocked), the run stops cleanly.
+- **Resume.** Every page is cached the moment it arrives, and each stage skips work that's already done. Re-running after a crash, Ctrl-C, or halt picks up where it stopped. Failed URLs are tried again, while final answers like 404 are not. Use `--reparse` to re-run parsers over the cached pages.
 
 Do winners first, losers later. By default, `projects` fetches winners only. Every submission's title, tagline, likes, and team already come from the gallery cards. To fetch full pages for a sample of non-winners, run a second pass, for example `crawl projects --loser-rate 0.1 --min-losers 5`. Cached pages are skipped.
 

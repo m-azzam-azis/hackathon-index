@@ -48,9 +48,10 @@ def _targets(conn, where: str, limit: int | None, params=()) -> list[sqlite3.Row
     return rows[:limit] if limit else rows
 
 
-def crawl_overviews(conn, fetcher: Fetcher, limit: int | None = None) -> None:
+def crawl_overviews(conn, fetcher: Fetcher, limit: int | None = None, reparse: bool = False) -> None:
     # Loose on purpose: any cash prize, or a headline amount we couldn't classify.
-    rows = _targets(conn, "(cash_prizes_count > 0 OR headline_prize_usd > 0) AND invite_only = 0", limit)
+    where = "(cash_prizes_count > 0 OR headline_prize_usd > 0) AND invite_only = 0"
+    rows = _targets(conn, where if reparse else f"{where} AND cash_usd_est IS NULL", limit)
     print(f"overview: {len(rows)} hackathons")
     for i, h in enumerate(rows, 1):
         html = fetcher.get(h["url"], SOURCE, "overview")
@@ -70,21 +71,23 @@ def crawl_overviews(conn, fetcher: Fetcher, limit: int | None = None) -> None:
             print(f"  overview {i}/{len(rows)}", flush=True)
 
 
-def crawl_galleries(conn, fetcher: Fetcher, min_cash: float, limit: int | None = None) -> None:
+def crawl_galleries(conn, fetcher: Fetcher, min_cash: float, limit: int | None = None,
+                    reparse: bool = False) -> None:
     # Low-confidence estimates also qualify if the headline clears the bar; the LLM pass
     # over prize text decides later, and we'd rather have the data than miss the event.
     rows = _targets(
         conn,
-        "winners_announced = 1 AND (cash_usd_est >= ? OR (cash_confidence = 'low' AND headline_prize_usd >= ?))",
+        "winners_announced = 1 AND (cash_usd_est >= ? OR (cash_confidence = 'low' AND headline_prize_usd >= ?))"
+        + ("" if reparse else " AND submissions_count IS NULL"),
         limit, (min_cash, min_cash),
     )
     print(f"gallery: {len(rows)} hackathons (min cash ${min_cash:,.0f})")
     for i, h in enumerate(rows, 1):
-        rank, page = 0, 1
+        rank, page, complete = 0, 1, False
         while True:
             html = fetcher.get(f"{h['url']}project-gallery?page={page}", SOURCE, "gallery")
             if html is None:
-                break
+                break  # failed page: leave submissions_count NULL so the next run retries
             data = parse.parse_gallery(html)
             for e in data["entries"]:
                 rank += 1
@@ -98,15 +101,17 @@ def crawl_galleries(conn, fetcher: Fetcher, min_cash: float, limit: int | None =
                        ("hackathon_id", "project_id"))
                 _link_members(conn, pid, e["members"])
             if not data["has_next"] or not data["entries"]:
+                complete = True
                 break
             page += 1
-        conn.execute("UPDATE hackathons SET submissions_count=? WHERE id=?", (rank, h["id"]))
+        if complete:
+            conn.execute("UPDATE hackathons SET submissions_count=? WHERE id=?", (rank, h["id"]))
         conn.commit()
         print(f"  gallery {i}/{len(rows)} {h['title']}: {rank} submissions", flush=True)
 
 
 def crawl_projects(conn, fetcher: Fetcher, loser_rate: float, min_losers: int,
-                   limit: int | None = None, seed: int = 42) -> None:
+                   limit: int | None = None, seed: int = 42, reparse: bool = False) -> None:
     hackathons = _targets(conn, "submissions_count > 0", limit)
     rng = random.Random(seed)  # same sample on every run, so resuming is stable
     todo: list[int] = []
@@ -124,7 +129,10 @@ def crawl_projects(conn, fetcher: Fetcher, loser_rate: float, min_losers: int,
         if pid not in seen:
             seen.add(pid)
             ordered.append(pid)
-    print(f"projects: {len(ordered)} project pages")
+    if not reparse:
+        done = {r[0] for r in conn.execute("SELECT id FROM projects WHERE detail_fetched = 1")}
+        ordered = [pid for pid in ordered if pid not in done]
+    print(f"projects: {len(ordered)} project pages to go")
 
     by_host = {parse.hackathon_key(r["url"]): r["id"] for r in conn.execute(
         "SELECT id, url FROM hackathons WHERE source=?", (SOURCE,))}
