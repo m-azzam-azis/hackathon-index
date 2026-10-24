@@ -83,3 +83,18 @@ def test_env_file(tmp_path, monkeypatch):
     llm.load_env(tmp_path / ".env")
     import os
     assert os.environ["OPENROUTER_API_KEY"] == "sk-or-x"
+
+
+def test_cut_off_reply_is_retried_with_more_tokens(monkeypatch):
+    budgets = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        budgets.append(body["max_tokens"])
+        if len(budgets) == 1:   # reasoning ate the budget: empty answer, finish_reason=length
+            return httpx.Response(200, json={"choices": [{"message": {"content": ""}, "finish_reason": "length"}]})
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"legit": 80}'}}], "usage": {}})
+
+    client = llm.Client("m", api_key="k", transport=httpx.MockTransport(handler))
+    assert client.json("s", "u")[0] == {"legit": 80}
+    assert budgets == [4000, 8000]

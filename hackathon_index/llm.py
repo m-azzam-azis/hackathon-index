@@ -47,15 +47,21 @@ class Client:
             headers={"Authorization": f"Bearer {key}", "X-Title": "hackathon-index"},
             timeout=120, transport=transport)
 
-    def json(self, system: str, user: str, max_tokens: int = 600) -> tuple[dict, dict]:
+    def json(self, system: str, user: str, max_tokens: int = 4000) -> tuple[dict, dict]:
         """One chat call that must answer with a JSON object. Returns (answer, usage);
-        usage includes `cost` in USD when the provider reports it (OpenRouter does)."""
+        usage includes `cost` in USD when the provider reports it (OpenRouter does).
+
+        Many cheap models reason before answering, and those reasoning tokens count against
+        max_tokens, so the budget is generous, reasoning is kept low, and a reply cut off by
+        the limit is retried once with double the budget."""
         body = {
             "model": self.model, "temperature": 0, "max_tokens": max_tokens,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
             "response_format": {"type": "json_object"},
+            "reasoning": {"effort": "low", "exclude": True},
             "usage": {"include": True},
         }
+        error = ""
         for attempt in range(6):
             try:
                 resp = self.http.post("/chat/completions", json=body)
@@ -65,11 +71,22 @@ class Client:
                 if resp.status_code == 200:
                     data = resp.json()
                     if "choices" in data:
-                        text = data["choices"][0]["message"].get("content") or ""
-                        return parse_json(text), data.get("usage") or {}
+                        choice = data["choices"][0]
+                        text = (choice.get("message") or {}).get("content") or ""
+                        try:
+                            return parse_json(text), data.get("usage") or {}
+                        except (LLMError, ValueError):
+                            if choice.get("finish_reason") == "length" and body["max_tokens"] < 16000:
+                                body["max_tokens"] *= 2
+                                continue
+                            raise LLMError(f"no JSON in reply (finish_reason={choice.get('finish_reason')}): "
+                                           f"{text[:150]!r}")
                     error = json.dumps(data.get("error", data))[:300]
                 elif resp.status_code in RETRY_STATUSES:
                     error = f"HTTP {resp.status_code}"
+                elif resp.status_code == 400 and "reasoning" in body and "reason" in resp.text.lower():
+                    del body["reasoning"]  # a provider that rejects the reasoning setting
+                    continue
                 else:  # 400/401/402/404: retrying won't help
                     raise LLMError(f"HTTP {resp.status_code}: {resp.text[:300]}")
             time.sleep(min(60, 2 ** attempt) + random.random())

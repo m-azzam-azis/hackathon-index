@@ -156,17 +156,23 @@ def sample(conn, data: Path, n: int, models: list[str], workers: int, max_cost: 
     tiers = {r["hackathon_id"]: r["tier"] for r in conn.execute("SELECT hackathon_id, tier FROM event_scores_latest")}
     prompts = [(h["id"], event_prompt(conn, h)) for h in events]
     results: dict[str, dict] = {}
+    summary: dict[str, tuple[float, int]] = {}
     for model in models:
         prog = Progress(f"sample {model}", len(prompts))
-        results[model] = {k: (lab, err) for k, lab, _, err in
-                          _run_all(Client(model), prompts, workers, prog, max_cost)}
+        rows = list(_run_all(Client(model), prompts, workers, prog, max_cost))
+        results[model] = {k: (lab, err) for k, lab, _, err in rows}
+        summary[model] = (sum(c for _, _, c, _ in rows), sum(1 for *_, e in rows if e))
         prog.done()
 
     out = data / "review" / f"events-sample-{datetime.now():%Y%m%d-%H%M%S}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     lines = [f"# Event labels: sample of {len(events)}", "",
-             "Columns per model: verdict · legit · cash / products / credits (USD) · opportunity strength · sponsor known.",
-             "Mark the ones that look wrong; that decides the model.", ""]
+             "Columns per model: verdict · legit · cash / gift cards / products / credits / tokens (USD) · "
+             "opportunity strength · sponsor known.",
+             "Mark the ones that look wrong; that decides the model.", "",
+             "| Model | Cost for this sample | Errors |", "|---|---|---|"]
+    lines += [f"| {m} | ${c:.4f} | {e} of {len(events)} |" for m, (c, e) in summary.items()]
+    lines.append("")
     for h in events:
         lines += [f"## {h['title']}", f"{h['url']} · organizer: {h['organizer']} · "
                   f"{h['submissions_count']} submissions · old tier: {tiers.get(h['id'], '-')} · "
@@ -178,7 +184,8 @@ def sample(conn, data: Path, n: int, models: list[str], workers: int, max_cost: 
                 continue
             lines.append(
                 f"- **{model}**: **{lab['verdict']}** · legit {lab['legit']} · cash ${lab['cash_usd']:,.0f} / "
-                f"products ${lab['products_usd']:,.0f} / credits ${lab['credits_usd']:,.0f} · "
+                f"gift cards ${lab['gift_cards_usd']:,.0f} / products ${lab['products_usd']:,.0f} / "
+                f"credits ${lab['credits_usd']:,.0f} / tokens ${lab['crypto_tokens_usd']:,.0f} · "
                 f"opp {lab['opportunity_strength']} · sponsor {lab['sponsor_known']} · {lab['reason']}"
                 + (f" · opportunities: {'; '.join(lab['opportunities'][:3])}" if lab["opportunities"] else ""))
         lines.append("")
