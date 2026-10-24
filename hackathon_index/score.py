@@ -3,7 +3,8 @@
 Each flag adds its weight to the score; trust signals subtract. Tiers: ok (score <= 1),
 watch (2-3), junk (>= 4). When an event has LLM labels (label_events.py), they replace the
 rough cash and organizer rules: what counts is any meaningful reward and legitimacy, so a
-real hackathon paying in hardware or opportunities isn't flagged for having no cash. Results go to `event_scores` under a new run_id, so every run is
+real hackathon paying in hardware or opportunities isn't flagged for having no cash, and a
+recurring organizer doesn't lift a weak grade. Results go to `event_scores` under a new run_id, so every run is
 kept and the rules can be tuned and compared. Nothing is deleted or excluded here: the
 tier is a label that analysis queries filter on.
 """
@@ -14,7 +15,7 @@ from datetime import datetime, timezone
 
 from .db import new_run_id
 
-RULES = "2"  # 1: rules only; 2: LLM event labels replace the cash/organizer rules when present
+RULES = "3"  # 1: rules only; 2: LLM labels replace the cash/organizer rules; 3: and repeat_organizer
 
 
 def flags_for(e: dict, org_events: int, winners: list[tuple[int, int]],
@@ -54,7 +55,7 @@ def flags_for(e: dict, org_events: int, winners: list[tuple[int, int]],
             f["winners_without_code"] = 1
     if e["managed_by_source"]:
         f["managed_by_devpost"] = -2
-    if org_events >= 5:
+    if org_events >= 5 and not label:   # recurring campus events; the grade already judges them
         f["repeat_organizer"] = -1
     return f
 

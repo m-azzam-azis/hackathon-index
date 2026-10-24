@@ -23,6 +23,9 @@ def test_flags():
     assert tier(sum(bogus.values())) == "junk"
     trusted = flags_for(event(submissions_count=15, managed_by_source=1), 8, [(2500, 1)])
     assert tier(sum(trusted.values())) == "ok"
+    # With a grade, a recurring organizer no longer lifts a weak event out of its tier.
+    maybe = flags_for(event(), 8, [(2500, 1)] * 5, {"verdict": "maybe", "cash_usd": 2000})
+    assert maybe == {"llm_maybe": 2} and tier(2) == "watch"
 
 
 def test_runs_are_kept_and_snapshots_restore(tmp_path):

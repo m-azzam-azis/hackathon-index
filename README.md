@@ -98,7 +98,7 @@ Filters are deliberately loose so small but real events aren't dropped. Separati
 | `few_registrants` | +2 | under 30 registrants |
 | `prize_per_entry_absurd` | +2 | over $2,500 per submission with under 20 entries |
 | `no_judges`, `one_off_organizer`, `weak_winner_writeups`, `winners_without_code` | +1 each | weaker signals |
-| `managed_by_devpost` / `repeat_organizer` | −2 / −1 | trust signals |
+| `managed_by_devpost` / `repeat_organizer` | −2 / −1 | trust signals (`repeat_organizer` only for events without an LLM grade) |
 
 **LLM event grades.** A legit event isn't automatically worth learning from: a well-run campus weekend whose prizes are stock partner swag teaches little about winning a big online challenge. So one LLM call per event reads the event page the way a person would: every prize block, the organizer, judges and field size. It returns what the prizes are really worth (cash, gift cards, credits, products and token prizes separately, so real hardware isn't mistaken for swag and a padded headline is caught) and three 0–10 scores. A fixed weighting turns them into a 0–100 quality score and an A–D grade:
 
