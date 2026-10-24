@@ -52,7 +52,7 @@ def main() -> None:
     sub.add_parser("score")
     le = sub.add_parser("label-events")
     le.add_argument("--sample", type=int, help="test on N events; writes a review file, not the database")
-    le.add_argument("--compare", help="comma-separated models for --sample (default: three cheap ones)")
+    le.add_argument("--compare", help="comma-separated models for --sample (default: two cheap ones)")
     le.add_argument("--model", help="model for a full run (default: deepseek/deepseek-v4.1-flash)")
     le.add_argument("--workers", type=int, default=16, help="parallel API calls")
     le.add_argument("--max-cost", type=float, default=3.0, help="stop once this many USD are spent")
