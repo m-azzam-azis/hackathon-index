@@ -4,10 +4,10 @@ One call per project reads the title, tagline, built-with list, writeup and the 
 tracks, and returns fixed-list tags (domain, AI role, form, sponsor-tech use), three 0-10
 scores and a one-line summary. The model is never told whether the project won, so winners
 and the sampled non-winners are tagged the same way and win rates can be compared fairly.
-Only projects from events scored `ok` are tagged.
+Only projects from events graded A or B are tagged by default (`--grades ABC` adds C).
 
     tag-projects --sample 40 --compare a,b    test: review file only, the database is untouched
-    tag-projects --model M                    full run: snapshot first, then a new versioned run
+    tag-projects --model M [--grades AB]      full run: snapshot first, then a new versioned run
 """
 
 import hashlib
@@ -101,30 +101,32 @@ def _tag(client: Client, prompt: str) -> tuple[dict | None, float, str | None]:
         return None, 0.0, str(exc)[:300]
 
 
-def targets(conn) -> list[tuple]:
-    """(project row, hackathon_id, is_winner) for every full project page in an `ok` event,
-    or in any event before the first scoring run. A project entered in several events is
-    tagged once, against the first of them."""
-    scored = conn.execute("SELECT 1 FROM event_scores_latest LIMIT 1").fetchone()
-    ok = "AND s.hackathon_id IN (SELECT hackathon_id FROM event_scores_latest WHERE tier='ok')" if scored else ""
+def targets(conn, grades: str = "AB") -> list[tuple]:
+    """(project row, hackathon_id, is_winner) for every full project page in an event with one
+    of `grades`, or in any event before the first grading run. A project entered in several
+    events is tagged once, against the first of them."""
+    graded = conn.execute("SELECT 1 FROM event_labels_latest LIMIT 1").fetchone()
+    marks = ", ".join("?" * len(grades))
+    where = f"AND s.hackathon_id IN (SELECT hackathon_id FROM event_labels_latest WHERE grade IN ({marks}))"
     rows = conn.execute(
         f"SELECT p.*, MIN(s.hackathon_id) AS hid, MAX(s.is_winner) AS won FROM projects p "
-        f"JOIN submissions s ON s.project_id = p.id WHERE p.detail_fetched = 1 {ok} "
-        f"GROUP BY p.id ORDER BY p.id").fetchall()
+        f"JOIN submissions s ON s.project_id = p.id WHERE p.detail_fetched = 1 {where if graded else ''} "
+        f"GROUP BY p.id ORDER BY p.id", tuple(grades) if graded else ()).fetchall()
     return [(r, r["hid"], r["won"] or 0) for r in rows]
 
 
-def pick_sample(conn, n: int) -> list[tuple]:
+def pick_sample(conn, n: int, grades: str = "AB") -> list[tuple]:
     """Deterministic: half winners, half non-winners."""
-    rows = sorted(targets(conn), key=lambda t: hashlib.sha1(t[0]["url"].encode()).hexdigest())
+    rows = sorted(targets(conn, grades), key=lambda t: hashlib.sha1(t[0]["url"].encode()).hexdigest())
     won = [t for t in rows if t[2]][:n - n // 2]
     lost = [t for t in rows if not t[2]][:n // 2]
     return won + lost
 
 
-def sample(conn, data: Path, n: int, models: list[str], workers: int, max_cost: float) -> Path:
+def sample(conn, data: Path, n: int, models: list[str], workers: int, max_cost: float,
+           grades: str = "AB") -> Path:
     """Tag a sample with each model and write a side-by-side review file. No DB writes."""
-    picked = pick_sample(conn, n)
+    picked = pick_sample(conn, n, grades)
     prompts = [(p["id"], project_prompt(conn, p, hid)) for p, hid, _ in picked]
     results, summary = {}, {}
     for model in models:
@@ -140,9 +142,9 @@ def sample(conn, data: Path, n: int, models: list[str], workers: int, max_cost: 
              "Per model: domain · AI role · form · sponsor tech · originality / depth / polish (0-10) · "
              "specific user · real use · summary. The models aren't told who won.", "",
              "| Model | Cost | Errors | Projected full run |", "|---|---|---|---|"]
-    total = len(targets(conn))
+    total = len(targets(conn, grades))
     lines += [f"| {m} | ${c:.4f} | {e} of {len(picked)} | ${c / max(len(picked), 1) * total:.2f} "
-              f"for {total:,} projects |" for m, (c, e) in summary.items()]
+              f"for {total:,} projects in {grades} events |" for m, (c, e) in summary.items()]
     lines.append("")
     for p, hid, won in picked:
         event = conn.execute("SELECT title FROM hackathons WHERE id=?", (hid,)).fetchone()[0]
@@ -164,10 +166,10 @@ def sample(conn, data: Path, n: int, models: list[str], workers: int, max_cost: 
 
 
 def full_run(conn, model: str, workers: int, max_cost: float, snapshot_path: str | None,
-             limit: int | None = None) -> str:
+             limit: int | None = None, grades: str = "AB") -> str:
     """Tag every target project. Resumes the newest unfinished run with the same model and
     prompt; otherwise starts a new run (earlier runs are kept)."""
-    params = json.dumps({"model": model, "prompt": PROMPT_VERSION})
+    params = json.dumps({"model": model, "prompt": PROMPT_VERSION, "grades": grades})
     row = conn.execute("SELECT run_id FROM enrich_runs WHERE step='tags' AND params=? "
                        "AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1", (params,)).fetchone()
     if row:
@@ -180,7 +182,7 @@ def full_run(conn, model: str, workers: int, max_cost: float, snapshot_path: str
                      "VALUES (?, 'tags', ?, ?, ?, ?)", (run_id, PROMPT_VERSION, params, snapshot_path, now.isoformat()))
         conn.commit()
     done = {r[0] for r in conn.execute("SELECT project_id FROM project_tags WHERE run_id=? AND error IS NULL", (run_id,))}
-    every = targets(conn)
+    every = targets(conn, grades)
     todo = [t for t in every if t[0]["id"] not in done][:limit]
     prog = Progress("tag projects", len(todo))
     errors = 0

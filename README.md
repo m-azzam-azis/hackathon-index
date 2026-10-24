@@ -64,7 +64,7 @@ flowchart LR
     C --> P
     P --> E[grade events<br/>LLM: stakes, sponsors]
     E --> S[score<br/>ok / watch / junk]
-    S --> T[tag projects<br/>LLM, ok events only]
+    S --> T[tag projects<br/>LLM, A/B events]
     T --> N[next: win rates,<br/>dashboard]
 ```
 
@@ -112,7 +112,7 @@ Two rules encode the researcher's own judgement: a company-run online challenge 
 
 Test before a full run: `label-events --sample 30` grades a spread of events with two cheap models and writes a side-by-side review file without touching the database. Hackathons listed in `anchors.txt` as great, ok or meh (see `anchors.example.txt`) are always included, and the review counts how many each model agrees with. A full run over about 1,400 events costs one to two dollars with a flash-class model. It stops at `--max-cost` and resumes if interrupted.
 
-**Project tags.** Every full project page from an `ok` event, winners and sampled non-winners alike, gets one LLM call over its title, tagline, built-with list, writeup and the event's prize tracks. The model is never told who won, so both groups are tagged the same way and win rates compare like with like. It returns fixed-list tags and three scores:
+**Project tags.** Every full project page from an event graded A or B (`--grades ABC` adds C), winners and sampled non-winners alike, gets one LLM call over its title, tagline, built-with list, writeup and the event's prize tracks. The model is never told who won, so both groups are tagged the same way and win rates compare like with like. It returns fixed-list tags and three scores:
 
 | Field | Values |
 |---|---|
@@ -139,7 +139,7 @@ Everything the menu does is also a command. `./run.sh <command>` and `hackathon-
 | `crawl {list,overview,gallery,categories,projects,all}` | run one stage, or all of them in order |
 | `label-events [--sample N] [--model M]` | LLM grade per event; `--sample` writes a review file only |
 | `score` | junk-event scoring; a new run each time, earlier runs kept |
-| `tag-projects [--sample N] [--model M]` | LLM tags per project in `ok` events; `--sample` writes a review file only |
+| `tag-projects [--sample N] [--model M] [--grades AB]` | LLM tags per project in A/B events; `--sample` writes a review file only |
 | `snapshot [label]` · `snapshots` · `restore NAME` | save, list, and go back to copies of the database |
 
 Useful `crawl` options:

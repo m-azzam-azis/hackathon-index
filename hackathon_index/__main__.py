@@ -64,6 +64,7 @@ def main() -> None:
     tp.add_argument("--workers", type=int, default=16, help="parallel API calls")
     tp.add_argument("--max-cost", type=float, default=15.0, help="stop once this many USD are spent")
     tp.add_argument("--limit", type=int, help="tag at most N projects this run (it resumes later)")
+    tp.add_argument("--grades", default="AB", help="tag projects from events with these grades (default: AB)")
     sn = sub.add_parser("snapshot")
     sn.add_argument("label", nargs="?", default="manual")
     sub.add_parser("snapshots")
@@ -108,10 +109,11 @@ def main() -> None:
         from . import tag_projects as tp
         if args.sample:
             models = args.compare.split(",") if args.compare else ([args.model] if args.model else tp.COMPARE_MODELS)
-            tp.sample(conn, args.data, args.sample, models, args.workers, args.max_cost)
+            tp.sample(conn, args.data, args.sample, models, args.workers, args.max_cost, args.grades.upper())
         else:
             snap = snapshot.take(db_path, "before-tag-projects")
-            tp.full_run(conn, args.model or tp.DEFAULT_MODEL, args.workers, args.max_cost, str(snap), args.limit)
+            tp.full_run(conn, args.model or tp.DEFAULT_MODEL, args.workers, args.max_cost, str(snap), args.limit,
+                        args.grades.upper())
         return
 
     if args.reparse:
