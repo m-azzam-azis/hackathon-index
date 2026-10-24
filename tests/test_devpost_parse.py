@@ -83,3 +83,24 @@ def test_project_without_template_headings():
     assert list(d["writeup"]) == ["Description"]
     assert "Splash screen" not in d["writeup"]["Description"]
     assert d["writeup"]["Description"].endswith("Built in Electron.")
+
+
+def test_project_with_text_in_headings():
+    long = "What it does: a 3D trivia map where every question is about the place you are travelling to."
+    html = f"""<div id="app-details-left"><div>
+      <h2>Inspiration Trivia, quest, risk</h2><h2>{long}</h2></div></div>"""
+    d = parse.parse_project(html)
+    assert list(d["writeup"]) == ["Inspiration Trivia, quest, risk", "Description"]
+    assert d["writeup"]["Description"] == long
+    only_short = parse.parse_project('<div id="app-details-left"><h2>Inspiration fun</h2><h2>Built fast</h2></div>')
+    assert only_short["writeup"] == {"Description": "Inspiration fun\nBuilt fast"}
+
+
+def test_video_urls():
+    assert parse.video_url("https://www.youtube.com/embed/gz_HUX_mEYY?enablejsapi=1") == \
+        "https://www.youtube.com/watch?v=gz_HUX_mEYY"
+    assert parse.video_url("https://youtu.be/abc12345") == "https://www.youtube.com/watch?v=abc12345"
+    assert parse.video_url("https://player.vimeo.com/video/123456") == "https://vimeo.com/123456"
+    assert parse.video_url("https://github.com/x/y") is None
+    d = parse.parse_project((FIX / "project.html").read_text())
+    assert d["video_urls"] == [] or all("watch" in v or "vimeo" in v for v in d["video_urls"])

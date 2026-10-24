@@ -1,7 +1,9 @@
 """CLI.  python -m hackathon_index <command> [options]
 
-    crawl   run one Devpost stage, or all of them in order
-    status  row counts and a quick look at the biggest events
+    crawl      run one Devpost stage, or all of them in order
+    status     row counts
+    score      junk-event scoring (a new run each time; earlier runs are kept)
+    snapshot   save a copy of index.db;  snapshots  list them;  restore NAME  go back to one
 """
 
 import argparse
@@ -9,6 +11,7 @@ import fcntl
 import sys
 from pathlib import Path
 
+from . import snapshot
 from .db import connect
 from .fetcher import CrawlHalted, Fetcher
 from .sources.devpost import crawl
@@ -43,20 +46,40 @@ def main() -> None:
     c.add_argument("--reparse", action="store_true", help="re-parse already processed pages (from cache)")
 
     sub.add_parser("status")
+    sub.add_parser("score")
+    sn = sub.add_parser("snapshot")
+    sn.add_argument("label", nargs="?", default="manual")
+    sub.add_parser("snapshots")
+    rs = sub.add_parser("restore")
+    rs.add_argument("name", help="snapshot file name, as `snapshots` lists it")
     args = ap.parse_args()
 
-    conn = connect(args.data / "index.db")
+    db_path = args.data / "index.db"
+    args.data.mkdir(parents=True, exist_ok=True)
+    if args.cmd == "snapshots":
+        for p in snapshot.listing(db_path):
+            print(f"{p.name}  {p.stat().st_size / 1e6:.0f} MB")
+        return
+    if args.cmd == "snapshot":
+        snapshot.take(db_path, args.label)
+        return
+    if args.cmd in ("score", "restore", "crawl"):
+        lock = take_lock(args.data)
+    if args.cmd == "restore":
+        print(f"restored {snapshot.restore(db_path, args.name).name}")
+        return
+    conn = connect(db_path)
     if args.cmd == "status":
         return status(conn)
+    if args.cmd == "score":
+        from .score import score_events
+        score_events(conn, str(snapshot.take(db_path, "before-score")))
+        return
 
-    lock = open(args.data / ".crawl.lock", "w")
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        sys.exit("another crawl is already running on this data folder; wait for it to finish")
-
+    if args.reparse:
+        snapshot.take(db_path, f"before-reparse-{args.stage}")
     # The fetcher gets its own connection: worker threads share it under the fetcher's lock.
-    fetcher = Fetcher(connect(args.data / "index.db", threads=True), args.data / "raw",
+    fetcher = Fetcher(connect(db_path, threads=True), args.data / "raw",
                       min_interval=args.interval, workers=args.workers)
     if args.stage == "all":
         # The category pass only matters for picking non-winners, so it rides along with them.
@@ -86,6 +109,15 @@ def main() -> None:
     status(conn)
 
 
+def take_lock(data: Path):
+    lock = open(data / ".crawl.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit("another crawl or step is already running on this data folder; wait for it to finish")
+    return lock
+
+
 def status(conn) -> None:
     q = lambda sql: conn.execute(sql).fetchone()[0]
     print(
@@ -99,6 +131,9 @@ def status(conn) -> None:
         f" | pages cached {q('SELECT COUNT(*) FROM pages WHERE status = 200')}"
         f" | failed {q('SELECT COUNT(*) FROM pages WHERE status IS NULL OR status != 200')}"
     )
+    tiers = conn.execute("SELECT tier, COUNT(*) FROM event_scores_latest GROUP BY tier").fetchall()
+    if tiers:
+        print("latest junk scoring: " + ", ".join(f"{t} {n}" for t, n in tiers))
 
 
 if __name__ == "__main__":

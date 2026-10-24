@@ -65,6 +65,21 @@ Going further back, or keeping it up to date:
                               # (--refresh-days), then crawls new events and newly announced winners
 ```
 
+## Cleaning steps (offline, nothing deleted)
+
+Every step after the crawl only adds. It writes its results to its own table under a new run id, never edits the crawl tables or earlier runs, and saves a full copy of `index.db` to `data/snapshots/` first. `crawl ... --reparse` also snapshots first.
+
+```bash
+./run.sh score              # junk-event scoring, a new run each time
+./run.sh snapshots          # list saved copies
+./run.sh restore NAME       # go back to one (the current state is snapshotted first)
+./run.sh snapshot my-label  # save a copy by hand
+```
+
+Junk scoring (`event_scores`, newest run in the `event_scores_latest` view) adds weighted flags per event and labels it `ok` (score ≤ 1), `watch` (2–3) or `junk` (≥ 4). Flags: `no_cash` (only swag, gift cards or credits found, +4), `low_cash` (under $1k, +2), `tiny_field` (under 10 submissions, +3), `small_field` (10–19, +1), `few_registrants` (under 30, +2), `prize_per_entry_absurd` (over $2,500 per submission with under 20 entries, +2), `no_judges`, `one_off_organizer`, `weak_winner_writeups`, `winners_without_code` (+1 each). Trust signals subtract: `managed_by_devpost` (−2), `repeat_organizer` with 5+ events (−1). `reason` holds the heaviest flag. Nothing is excluded; analysis queries filter on the tier.
+
+Each snapshot is a full copy (about 270 MB today), so delete old ones from `data/snapshots/` by hand when space matters.
+
 Manual equivalent: `python -m hackathon_index crawl {list,overview,gallery,projects,all} [options]`, then `pytest -q` for the tests.
 
 Everything lands in `data/index.db` (SQLite). Open it with `sqlite3`, DB Browser for SQLite, or Datasette.
@@ -74,7 +89,8 @@ Everything lands in `data/index.db` (SQLite). Open it with `sqlite3`, DB Browser
 - `hackathons`: one row per event. Listing metadata, `registrants`, `submissions_count` (from the gallery), `cash_usd_est`, `cash_confidence`, `judges_count`.
 - `prizes`: one row per prize block: title, value, "in cash" flag, winner count, description.
 - `judges`: name and title.
-- `projects`: title, tagline, likes, built-with, links, `has_repo`, `has_video`, `image_count`, `writeup` (JSON of section → text), `writeup_chars`.
+- `projects`: title, tagline, likes, built-with, links, `has_repo`, `has_video`, `video_urls` (YouTube/Vimeo watch links), `image_count`, `writeup` (JSON of section → text), `writeup_chars`.
 - `submissions`: project × hackathon, with `is_winner` and gallery rank. A project often appears under several hackathons.
 - `submission_prizes`: which prize a project won ("Best Use of Neo4j").
 - `people` and `project_members`: Devpost profiles, for builder track records later.
+- `enrich_runs` and `event_scores`: one row per cleaning run, and the junk score of each event in each run.

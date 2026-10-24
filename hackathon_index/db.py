@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS projects (
     image_count     INTEGER,
     writeup         TEXT,               -- JSON {section heading: text}
     writeup_chars   INTEGER,
+    video_urls      TEXT,               -- JSON list (YouTube/Vimeo watch links)
     detail_fetched  INTEGER DEFAULT 0,
     UNIQUE (source, url)
 );
@@ -122,6 +123,31 @@ CREATE TABLE IF NOT EXISTS people (
     UNIQUE (source, profile_url)
 );
 
+-- Enrichment steps. Each run adds rows under a new run_id and never edits the crawl tables
+-- above or earlier runs; the *_latest views pick the newest run.
+CREATE TABLE IF NOT EXISTS enrich_runs (
+    run_id      TEXT PRIMARY KEY,       -- e.g. score-20261024-053000
+    step        TEXT NOT NULL,          -- score | prizes | tags ...
+    rules       TEXT,                   -- version of the step's rules
+    params      TEXT,                   -- JSON
+    snapshot    TEXT,                   -- database copy taken just before the run
+    created_at  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS event_scores (
+    run_id        TEXT NOT NULL REFERENCES enrich_runs(run_id),
+    hackathon_id  INTEGER NOT NULL REFERENCES hackathons(id),
+    score         INTEGER,              -- sum of flag weights; higher = more doubtful
+    tier          TEXT,                 -- ok | watch | junk
+    reason        TEXT,                 -- the heaviest flag, e.g. no_cash, tiny_field
+    flags         TEXT,                 -- JSON {flag: weight}
+    PRIMARY KEY (run_id, hackathon_id)
+);
+
+CREATE VIEW IF NOT EXISTS event_scores_latest AS
+    SELECT e.* FROM event_scores e
+    WHERE e.run_id = (SELECT run_id FROM enrich_runs WHERE step = 'score' ORDER BY created_at DESC LIMIT 1);
+
 CREATE TABLE IF NOT EXISTS project_members (
     project_id  INTEGER NOT NULL REFERENCES projects(id),
     person_id   INTEGER NOT NULL REFERENCES people(id),
@@ -143,7 +169,7 @@ def connect(path: Path, threads: bool = False) -> sqlite3.Connection:
 
 
 # Columns added after the first release; ALTER TABLE for databases created before them.
-_ADDED_COLUMNS = {"hackathons": {"categories_done": "INTEGER"}}
+_ADDED_COLUMNS = {"hackathons": {"categories_done": "INTEGER"}, "projects": {"video_urls": "TEXT"}}
 
 
 def _migrate(conn: sqlite3.Connection) -> None:

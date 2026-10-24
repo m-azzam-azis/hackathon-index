@@ -312,10 +312,10 @@ def crawl_projects(conn, fetcher: Fetcher, loser_rate: float, min_losers: int, m
         conn.execute(
             "UPDATE projects SET title=?, tagline=COALESCE(?, tagline), likes=COALESCE(?, likes), "
             "built_with=?, links=?, has_repo=?, has_video=?, image_count=?, writeup=?, writeup_chars=?, "
-            "team_size=COALESCE(?, team_size), detail_fetched=1 WHERE id=?",
+            "video_urls=?, team_size=COALESCE(?, team_size), detail_fetched=1 WHERE id=?",
             (d["title"], d["tagline"], d["likes"], json.dumps(d["built_with"]), json.dumps(d["links"]),
              d["has_repo"], d["has_video"], d["image_count"], json.dumps(d["writeup"]),
-             d["writeup_chars"], len(d["members"]) or None, pid),
+             d["writeup_chars"], json.dumps(d["video_urls"]), len(d["members"]) or None, pid),
         )
         _link_members(conn, pid, d["members"])
         # Cross-submissions: the same project entered elsewhere (and maybe won there).

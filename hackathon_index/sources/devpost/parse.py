@@ -164,6 +164,15 @@ def parse_gallery(html: str) -> dict:
 
 # ---------------------------------------------------------------- project page
 
+def video_url(url: str) -> str | None:
+    """A YouTube/Vimeo embed or link as a plain watch URL; None for anything else."""
+    m = re.search(r"(?:youtube(?:-nocookie)?\.com/(?:embed/|watch\?v=|shorts/)|youtu\.be/)([\w-]{6,})", url or "")
+    if m:
+        return f"https://www.youtube.com/watch?v={m.group(1)}"
+    m = re.search(r"vimeo\.com/(?:video/)?(\d+)", url or "")
+    return f"https://vimeo.com/{m.group(1)}" if m else None
+
+
 _SKIP_SECTIONS = {"Built With", "Try it out"}
 
 
@@ -185,7 +194,7 @@ def parse_project(html: str) -> dict:
     writeup, current = {}, None
     details = soup.select_one("#app-details-left")
     if details:
-        for el in details.find_all(["h2", "p", "ul", "ol", "pre", "blockquote", "h3"]):
+        for el in details.find_all(["h2", "p", "ul", "ol", "pre", "blockquote", "h1", "h3", "h4", "h5", "h6"]):
             if el.find_parent(id=["built-with", "gallery"]) or el.find_parent(class_="app-links") \
                     or el.get("id") == "gallery":
                 continue
@@ -198,10 +207,23 @@ def parse_project(html: str) -> dict:
                 key = current or "Description"
                 writeup[key] = (writeup.get(key, "") + "\n" + el.get_text(" ", strip=True)).strip()
 
+        # Some writeups put every paragraph in a heading: keep long headings as text, and if
+        # nothing else was found, use the headings themselves.
+        for el in details.find_all("h2"):
+            text = _text(el)
+            if len(text) > 80 and text in writeup and not writeup[text]:
+                del writeup[text]
+                writeup["Description"] = (writeup.get("Description", "") + "\n" + text).strip()
+        if not any(writeup.values()):
+            heads = [h for h in writeup if h]
+            writeup = {"Description": "\n".join(heads)} if heads else {}
+
     links = [a.get("title") or a.get("href") for a in soup.select('[data-role="software-urls"] a')]
     links = [l for l in links if l]
     members = sorted({a["href"].split("?")[0] for a in soup.select("#app-team a.user-profile-link[href]")})
     gallery = soup.select_one("#gallery")
+    videos = [video_url(f.get("src", "")) for f in (gallery.select("iframe") if gallery else [])]
+    videos += [video_url(l) for l in links]
     return {
         "title": _text(soup.select_one("#app-title")),
         "tagline": _text(soup.select_one("#software-header p.large")) or None,
@@ -210,6 +232,7 @@ def parse_project(html: str) -> dict:
         "links": links,
         "has_repo": int(any(re.search(r"github\.com|gitlab\.com|bitbucket\.org", l) for l in links)),
         "has_video": int(bool(gallery and gallery.select("iframe"))),
+        "video_urls": list(dict.fromkeys(v for v in videos if v)),
         "image_count": len(gallery.select("img")) if gallery else 0,
         "writeup": writeup,
         "writeup_chars": sum(len(v) for v in writeup.values()),
