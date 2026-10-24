@@ -11,11 +11,14 @@ from hackathon_index.db import connect
 from hackathon_index.score import score_events
 
 ANSWERS = {  # by event title
-    "Logitech Build": {"cash_usd": 0, "products_usd": 6000, "sponsor_known": 2, "legit": 90,
-                       "opportunity_strength": 1, "reason": "real hardware from Logitech"},
-    "Google Meetup": {"cash_usd": 0, "products_usd": 0, "opportunities": ["meet the Google Cloud team"],
-                      "opportunity_strength": 3, "sponsor_known": 2, "legit": 85, "reason": "strong opportunity"},
-    "Bogus Fund": {"cash_usd": 10000, "sponsor_known": 0, "legit": 20, "inflated": True, "reason": "unverifiable"},
+    "Logitech Build": {"products_usd": 6000, "event_type": "company_challenge", "winner_quality": 7,
+                       "stakes": 7, "sponsor_caliber": 9, "competition": 7, "legit": 90},
+    "Google Meetup": {"opportunities": ["meet the Google Cloud team"], "event_type": "professional_open",
+                      "winner_quality": 8, "stakes": 6, "sponsor_caliber": 10, "competition": 8, "legit": 85},
+    "Campus Weekend": {"products_usd": 400, "event_type": "student_local", "stock_prizes": True,
+                       "winner_quality": 3, "stakes": 3, "sponsor_caliber": 3, "competition": 3, "legit": 90},
+    "Bogus Fund": {"cash_usd": 10000, "winner_quality": 6, "stakes": 9, "sponsor_caliber": 1,
+                   "competition": 2, "legit": 20, "inflated": True},
 }
 
 
@@ -44,18 +47,22 @@ def setup(tmp_path, monkeypatch, calls):
     return conn
 
 
-def test_verdicts():
-    assert le.normalise(ANSWERS["Logitech Build"])["verdict"] == "worth"    # hardware counts
-    assert le.normalise(ANSWERS["Google Meetup"])["verdict"] == "worth"     # strong opportunity counts
-    assert le.normalise(ANSWERS["Bogus Fund"])["verdict"] == "skip"         # cash, but not legit
+def test_grades():
+    grades = {t: le.normalise(a)["grade"] for t, a in ANSWERS.items()}
+    # Hardware and opportunities count; a legit but stock-prize campus weekend and an
+    # unverifiable big-money event both grade low.
+    assert grades == {"Logitech Build": "B", "Google Meetup": "A", "Campus Weekend": "D", "Bogus Fund": "D"}
 
 
 def test_sample_writes_review_only(tmp_path, monkeypatch):
     calls = []
     conn = setup(tmp_path, monkeypatch, calls)
-    out = le.sample(conn, tmp_path, 3, ["model-a", "model-b"], workers=2, max_cost=1)
+    anchors = tmp_path / "anchors.txt"
+    anchors.write_text("+ Google Meetup\n- https://e3.devpost.com/\n- Not In Database\n")
+    out = le.sample(conn, tmp_path, 2, ["model-a", "model-b"], workers=2, max_cost=1, anchors_path=anchors)
     text = out.read_text()
-    assert "Logitech Build" in text and "**model-b**: **worth**" in text
+    assert "**model-b**: **A**" in text and "your anchor: great" in text
+    assert "| model-a | $0.0030 | 0 of 3 | 2 of 2 |" in text     # 2 anchors + sampled events, no repeats
     assert len(calls) == 6
     assert conn.execute("SELECT COUNT(*) FROM event_labels").fetchone()[0] == 0
 
@@ -66,15 +73,15 @@ def test_full_run_resumes_and_feeds_scoring(tmp_path, monkeypatch):
     first = le.full_run(conn, "model-a", workers=2, max_cost=1, snapshot_path=None, limit=2)
     assert len(calls) == 2
     assert le.full_run(conn, "model-a", workers=2, max_cost=1, snapshot_path=None) == first   # resumed
-    assert len(calls) == 3                                                                 # only the missing one
+    assert len(calls) == 4                                                                 # only the missing ones
     assert conn.execute("SELECT finished_at FROM enrich_runs WHERE run_id=?", (first,)).fetchone()[0]
     assert le.full_run(conn, "model-a", workers=2, max_cost=1, snapshot_path=None) != first  # finished: new run
 
     score_events(conn)
     tiers = dict(conn.execute("SELECT h.title, s.tier FROM event_scores_latest s "
                               "JOIN hackathons h ON h.id = s.hackathon_id").fetchall())
-    # Rules alone would call both no-cash events junk; the labels keep them.
-    assert tiers == {"Logitech Build": "ok", "Google Meetup": "ok", "Bogus Fund": "junk"}
+    # Rules alone would call both no-cash events junk; the grades keep them and drop the rest.
+    assert tiers == {"Logitech Build": "ok", "Google Meetup": "ok", "Campus Weekend": "junk", "Bogus Fund": "junk"}
 
 
 def test_env_file(tmp_path, monkeypatch):

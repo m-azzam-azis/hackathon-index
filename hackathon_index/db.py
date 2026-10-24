@@ -149,7 +149,9 @@ CREATE VIEW IF NOT EXISTS event_scores_latest AS
     SELECT e.* FROM event_scores e
     WHERE e.run_id = (SELECT run_id FROM enrich_runs WHERE step = 'score' ORDER BY created_at DESC LIMIT 1);
 
--- LLM labels per event (label_events.py): what the prizes are really worth, and legitimacy.
+-- LLM grades per event (label_events.py): prize value, four 0-10 scores, quality 0-100, grade A-D.
+-- Columns added in prompt v2: event_type, stock_prizes, stakes, sponsor_caliber, competition,
+-- winner_quality, winner_notes, quality, grade (see _ADDED_COLUMNS).
 CREATE TABLE IF NOT EXISTS event_labels (
     run_id                TEXT NOT NULL REFERENCES enrich_runs(run_id),
     hackathon_id          INTEGER NOT NULL REFERENCES hackathons(id),
@@ -159,12 +161,12 @@ CREATE TABLE IF NOT EXISTS event_labels (
     products_usd          REAL,
     crypto_tokens_usd     REAL,
     opportunities         TEXT,         -- JSON list
-    opportunity_strength  INTEGER,      -- 0 none .. 3 strong
-    sponsor_known         INTEGER,      -- 0 unknown, 1 niche, 2 major
+    opportunity_strength  INTEGER,      -- prompt v1 only
+    sponsor_known         INTEGER,      -- prompt v1 only
     legit                 INTEGER,      -- 0-100
     inflated              INTEGER,      -- headline padded with credits, swag or per-participant pools
     reason                TEXT,
-    verdict               TEXT,         -- worth | maybe | skip
+    verdict               TEXT,         -- worth | maybe | skip (v2: from the grade)
     cost                  REAL,         -- USD for this call
     error                 TEXT,
     PRIMARY KEY (run_id, hackathon_id)
@@ -200,6 +202,9 @@ _ADDED_COLUMNS = {
     "hackathons": {"categories_done": "INTEGER"},
     "projects": {"video_urls": "TEXT"},
     "enrich_runs": {"finished_at": "TEXT"},
+    "event_labels": {"event_type": "TEXT", "stock_prizes": "INTEGER", "stakes": "INTEGER",
+                     "sponsor_caliber": "INTEGER", "competition": "INTEGER", "winner_quality": "INTEGER",
+                     "winner_notes": "TEXT", "quality": "INTEGER", "grade": "TEXT"},
 }
 
 

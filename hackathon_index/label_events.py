@@ -1,9 +1,11 @@
-"""LLM labels per event: what the prizes are really worth, and whether the event is legit.
+"""LLM grades per event: how much there is to learn from it, 0-100.
 
-One call per event reads every prize block plus the organizer, judges and field size, and
-returns cash, credits, products and opportunities separately. That way a Logitech hackathon
-paying in real hardware, or a Google one offering time with their team, isn't mistaken for
-swag-only, and a "$40k participation prize" isn't mistaken for cash.
+One call per event reads every prize block, the organizer, judges and field size, and the
+top winners' writeups. It returns what the prizes are really worth (cash, credits, products
+and opportunities separately, so real hardware isn't mistaken for swag and a "$40k
+participation prize" isn't mistaken for cash) and four 0-10 scores: winner quality, stakes,
+sponsor caliber and competition. A fixed weighting turns those into the quality score and an
+A-D grade. Legit isn't enough: a well-run local weekend with stock partner prizes grades low.
 
     label-events --sample 30 --compare a,b,c   test: review file only, the database is untouched
     label-events --model M                     full run: snapshot first, then a new versioned run
@@ -19,36 +21,48 @@ from .db import new_run_id
 from .llm import Client, LLMError
 from .progress import Progress
 
-PROMPT_VERSION = "1"
+PROMPT_VERSION = "2"  # 1: worth/maybe/skip from prizes; 2: 0-100 quality score incl. winner quality
 DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
 COMPARE_MODELS = ["deepseek/deepseek-v4.1-flash", "z-ai/glm-5.3-flash", "anthropic/claude-haiku-5.5"]
+EVENT_TYPES = ("student_local", "student_online", "community", "company_challenge", "professional_open")
 
-SYSTEM = """You assess hackathons for a researcher studying what wins. From the event details,
-work out what the prizes are really worth and whether the event is a real, worthwhile competition.
-Answer with one JSON object and nothing else:
+SYSTEM = """You grade past hackathons for a builder who wants to learn what wins strong, online,
+2026-level competitions. A legit event is not enough: a local student weekend whose prizes are
+stock partner swag teaches little, even if it was run well. Read the event, its prizes and its
+top winners, and answer with one JSON object and nothing else:
 {
-  "cash_usd": total money paid to winners (cash, bank transfer, PayPal, stablecoins), in USD,
-  "gift_cards_usd": total gift cards, in USD,
+  "cash_usd": money paid to winners (cash, bank transfer, PayPal, stablecoins), in USD,
+  "gift_cards_usd": gift cards, in USD,
   "credits_usd": cloud/API/platform credits, vouchers, subscriptions, licences, domains, in USD,
-  "products_usd": physical products (laptops, headphones, dev kits...) at estimated retail, in USD,
+  "products_usd": physical products at estimated retail, in USD,
   "crypto_tokens_usd": prizes paid in a project's own token (not stablecoins), in USD,
-  "opportunities": short list such as "meeting with Google Cloud team", "accelerator interview",
-  "opportunity_strength": 0 none, 1 weak (certificate, shoutout, swag), 2 real (interviews,
-      mentoring, demo day, pitching to investors), 3 strong (investment, accelerator place,
-      job offer track, time with a major company's product team),
-  "sponsor_known": 0 unknown or unverifiable, 1 real but niche, 2 major well-known company,
-      university or institution,
-  "legit": 0-100 confidence this is a real, fairly run competition worth studying,
+  "opportunities": short list, e.g. "meeting with Google Cloud team", "accelerator interview",
+  "event_type": one of "student_local", "student_online", "community", "company_challenge",
+      "professional_open",
+  "stock_prizes": true if most prize categories are generic partner prizes (MLH partner tracks
+      such as GoDaddy domains, TinyMCE, Kintone, "Best use of X" with small swag) rather than
+      prizes the organizer or a major sponsor designed and funded,
+  "stakes": 0-10, how much winning is worth: real value of the top prizes and how concentrated
+      they are (a few large prizes beat twenty token awards); credits and swag count little,
+  "sponsor_caliber": 0-10, how significant the companies funding and judging the main prizes are
+      (10 = Google, AWS, Microsoft, OpenAI-level running their own track; 2 = small tool sponsors),
+  "competition": 0-10, how hard it was to win: field size, open online vs local, professional
+      vs student entrants,
+  "winner_quality": 0-10, how impressive the winning projects below are by today's standards
+      for an online hackathon: ambition, technical depth, polish, real use of sponsor tech
+      (10 = would stand out at a top online challenge in 2026; 3 = a standard weekend demo),
+  "winner_notes": one sentence on the winners,
+  "legit": 0-100 confidence this is a real, fairly run competition,
   "inflated": true if headline amounts are padded (per-participant pools, "equivalent value",
-      totals that count credits or swag as cash),
-  "reason": one short sentence
+      credits or swag counted as cash),
+  "reason": one short sentence explaining the overall grade
 }
 Count each prize once; when a prize has several winners, multiply. Convert other currencies
-to USD. Use 0 when a kind of reward is absent. Do not count the same money twice when the
-title and description repeat it."""
+to USD. Use 0 when a kind of reward is absent. Judge winners on what the writeups show; don't
+reward length or buzzwords alone."""
 
 
-def event_prompt(conn, h) -> str:
+def event_prompt(conn, h, winners: int = 3, writeup_chars: int = 1200) -> str:
     themes = ", ".join(json.loads(h["themes"] or "[]"))
     lines = [
         f"Title: {h['title']}",
@@ -62,12 +76,29 @@ def event_prompt(conn, h) -> str:
     prizes = conn.execute("SELECT title, value_text, winners_count, description FROM prizes "
                           "WHERE hackathon_id=? ORDER BY position LIMIT 30", (h["id"],)).fetchall()
     for p in prizes:
-        desc = " ".join((p["description"] or "").split())[:500]
-        winners = f" · {p['winners_count']} winners" if (p["winners_count"] or 1) > 1 else ""
-        lines.append(f"- {p['title']} [{p['value_text'] or 'no value given'}{winners}] {desc}")
+        desc = " ".join((p["description"] or "").split())[:400]
+        count = f" · {p['winners_count']} winners" if (p["winners_count"] or 1) > 1 else ""
+        lines.append(f"- {p['title']} [{p['value_text'] or 'no value given'}{count}] {desc}")
     judges = conn.execute("SELECT name, title FROM judges WHERE hackathon_id=? LIMIT 8", (h["id"],)).fetchall()
     if judges:
         lines += ["", "Judges: " + "; ".join(f"{j['name']} ({j['title'] or '-'})" for j in judges)]
+
+    top = conn.execute(
+        "SELECT p.id, p.title, p.tagline, p.built_with, p.has_repo, p.has_video, p.writeup FROM submissions s "
+        "JOIN projects p ON p.id = s.project_id WHERE s.hackathon_id=? AND s.is_winner=1 "
+        "AND p.detail_fetched=1 AND p.writeup_chars > 200 ORDER BY s.gallery_rank LIMIT ?",
+        (h["id"], winners)).fetchall()
+    if top:
+        lines += ["", "Top winners:"]
+    for w in top:
+        won = [r[0] for r in conn.execute("SELECT prize_title FROM submission_prizes WHERE hackathon_id=? "
+                                          "AND project_id=?", (h["id"], w["id"]))]
+        text = " ".join(" ".join(f"{k}: {v}" for k, v in json.loads(w["writeup"] or "{}").items()).split())
+        built = ", ".join(json.loads(w["built_with"] or "[]")[:12])
+        lines += [f"* {w['title']}: {w['tagline'] or ''}",
+                  f"  won: {'; '.join(won) or '?'} · built with: {built or '-'} · "
+                  f"repo: {'yes' if w['has_repo'] else 'no'} · video: {'yes' if w['has_video'] else 'no'}",
+                  f"  {text[:writeup_chars]}"]
     return "\n".join(lines)
 
 
@@ -78,29 +109,49 @@ def _num(v) -> float:
         return 0.0
 
 
+def _score10(v) -> int:
+    return int(round(min(10, _num(v))))
+
+
 def normalise(a: dict) -> dict:
     out = {k: _num(a.get(k)) for k in
            ("cash_usd", "gift_cards_usd", "credits_usd", "products_usd", "crypto_tokens_usd")}
     opps = a.get("opportunities") or []
     out["opportunities"] = [str(o) for o in opps] if isinstance(opps, list) else [str(opps)]
-    out["opportunity_strength"] = int(min(3, _num(a.get("opportunity_strength"))))
-    out["sponsor_known"] = int(min(2, _num(a.get("sponsor_known"))))
+    out["event_type"] = a.get("event_type") if a.get("event_type") in EVENT_TYPES else None
+    out["stock_prizes"] = int(bool(a.get("stock_prizes")))
+    for k in ("stakes", "sponsor_caliber", "competition", "winner_quality"):
+        out[k] = _score10(a.get(k))
+    out["winner_notes"] = str(a.get("winner_notes") or "")[:300]
     out["legit"] = int(min(100, _num(a.get("legit"))))
     out["inflated"] = int(bool(a.get("inflated")))
     out["reason"] = str(a.get("reason") or "")[:300]
-    out["verdict"] = verdict(out)
+    out["quality"] = quality(out)
+    out["grade"] = grade(out["quality"])
+    out["verdict"] = {"A": "worth", "B": "worth", "C": "maybe"}.get(out["grade"], "skip")
     return out
 
 
-def verdict(x: dict) -> str:
-    """worth | maybe | skip. Any meaningful reward counts, not just cash."""
-    money = x["cash_usd"] + x["gift_cards_usd"] + 0.5 * x["crypto_tokens_usd"]
-    meaningful = (money >= 1000 or x["products_usd"] >= 1000
-                  or (x["opportunity_strength"] >= 2 and x["sponsor_known"] == 2)
-                  or x["opportunity_strength"] == 3)
-    if x["legit"] < 40 or not meaningful:
-        return "skip"
-    return "worth" if x["legit"] >= 70 else "maybe"
+WEIGHTS = {"winner_quality": 0.35, "stakes": 0.25, "sponsor_caliber": 0.20, "competition": 0.20}
+
+
+def quality(x: dict) -> int:
+    """0-100. Winner quality weighs most: it's what the researcher actually learns from."""
+    q = 10 * sum(x[k] * w for k, w in WEIGHTS.items())
+    if x["legit"] < 40:
+        q = min(q, 20)
+    if x["stock_prizes"]:
+        q -= 5
+    return int(round(max(0, min(100, q))))
+
+
+def grade(q: int) -> str:
+    return "A" if q >= 75 else "B" if q >= 60 else "C" if q >= 40 else "D"
+
+
+LABEL_COLUMNS = ("cash_usd", "gift_cards_usd", "credits_usd", "products_usd", "crypto_tokens_usd",
+                 "opportunities", "event_type", "stock_prizes", "stakes", "sponsor_caliber", "competition",
+                 "winner_quality", "winner_notes", "legit", "inflated", "reason", "quality", "grade", "verdict")
 
 
 def _label(client: Client, prompt: str) -> tuple[dict | None, float, str | None]:
@@ -150,9 +201,38 @@ def pick_sample(conn, n: int) -> list:
     return picked
 
 
-def sample(conn, data: Path, n: int, models: list[str], workers: int, max_cost: float) -> Path:
+def load_anchors(path: Path) -> list[tuple[str, str]]:
+    """anchors.txt: one event per line, `+` for great and `-` for meh, then a URL or a title.
+    Anchors always join the sample, so the grades can be checked against your own judgement."""
+    if not path.exists():
+        return []
+    out = []
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if line[:1] in "+-" and line[1:].strip():
+            out.append(("great" if line[0] == "+" else "meh", line[1:].strip()))
+    return out
+
+
+def _find(conn, ref: str):
+    if "devpost.com" in ref:
+        return conn.execute("SELECT * FROM hackathons WHERE url LIKE ?", (f"%{ref.split('//')[-1].split('/')[0]}%",)).fetchone()
+    return conn.execute("SELECT * FROM hackathons WHERE title LIKE ? ORDER BY submissions_count DESC",
+                        (f"%{ref}%",)).fetchone()
+
+
+def sample(conn, data: Path, n: int, models: list[str], workers: int, max_cost: float,
+           anchors_path: Path = Path("anchors.txt")) -> Path:
     """Label a sample with each model and write a side-by-side review file. No DB writes."""
-    events = pick_sample(conn, n)
+    expected, events = {}, []
+    for label, ref in load_anchors(anchors_path):
+        h = _find(conn, ref)
+        if h is None:
+            print(f"  anchor not found in the database: {ref}")
+        elif h["id"] not in expected:
+            expected[h["id"]] = label
+            events.append(h)
+    events += [h for h in pick_sample(conn, n) if h["id"] not in expected]
     tiers = {r["hackathon_id"]: r["tier"] for r in conn.execute("SELECT hackathon_id, tier FROM event_scores_latest")}
     prompts = [(h["id"], event_prompt(conn, h)) for h in events]
     results: dict[str, dict] = {}
@@ -164,30 +244,36 @@ def sample(conn, data: Path, n: int, models: list[str], workers: int, max_cost: 
         summary[model] = (sum(c for _, _, c, _ in rows), sum(1 for *_, e in rows if e))
         prog.done()
 
+    def agreement(model):
+        ok = sum(1 for hid, label in expected.items()
+                 if (lab := results[model].get(hid, (None,))[0])
+                 and (lab["grade"] in "AB") == (label == "great"))
+        return f"{ok} of {len(expected)}" if expected else "-"
+
     out = data / "review" / f"events-sample-{datetime.now():%Y%m%d-%H%M%S}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
-    lines = [f"# Event labels: sample of {len(events)}", "",
-             "Columns per model: verdict · legit · cash / gift cards / products / credits / tokens (USD) · "
-             "opportunity strength · sponsor known.",
-             "Mark the ones that look wrong; that decides the model.", "",
-             "| Model | Cost for this sample | Errors |", "|---|---|---|"]
-    lines += [f"| {m} | ${c:.4f} | {e} of {len(events)} |" for m, (c, e) in summary.items()]
+    lines = [f"# Event grades: {len(events)} events ({len(expected)} of them your anchors)", "",
+             "Per model: **grade** (quality 0-100) · winners / stakes / sponsor / competition (0-10) · "
+             "event type · cash / products / credits (USD) · reason.",
+             "Anchors agree when great → A/B and meh → C/D.", "",
+             "| Model | Cost | Errors | Anchors agreeing |", "|---|---|---|---|"]
+    lines += [f"| {m} | ${c:.4f} | {e} of {len(events)} | {agreement(m)} |" for m, (c, e) in summary.items()]
     lines.append("")
     for h in events:
+        anchor = f" · **your anchor: {expected[h['id']]}**" if h["id"] in expected else ""
         lines += [f"## {h['title']}", f"{h['url']} · organizer: {h['organizer']} · "
-                  f"{h['submissions_count']} submissions · old tier: {tiers.get(h['id'], '-')} · "
-                  f"old cash estimate: ${h['cash_usd_est'] or 0:,.0f}", ""]
+                  f"{h['submissions_count']} submissions · old tier: {tiers.get(h['id'], '-')}{anchor}", ""]
         for model in models:
             lab, err = results[model].get(h["id"], (None, "not run"))
             if lab is None:
                 lines.append(f"- **{model}**: error: {err}")
                 continue
             lines.append(
-                f"- **{model}**: **{lab['verdict']}** · legit {lab['legit']} · cash ${lab['cash_usd']:,.0f} / "
-                f"gift cards ${lab['gift_cards_usd']:,.0f} / products ${lab['products_usd']:,.0f} / "
-                f"credits ${lab['credits_usd']:,.0f} / tokens ${lab['crypto_tokens_usd']:,.0f} · "
-                f"opp {lab['opportunity_strength']} · sponsor {lab['sponsor_known']} · {lab['reason']}"
-                + (f" · opportunities: {'; '.join(lab['opportunities'][:3])}" if lab["opportunities"] else ""))
+                f"- **{model}**: **{lab['grade']}** ({lab['quality']}) · winners {lab['winner_quality']} / "
+                f"stakes {lab['stakes']} / sponsor {lab['sponsor_caliber']} / competition {lab['competition']} · "
+                f"{lab['event_type'] or '?'}{' · stock prizes' if lab['stock_prizes'] else ''} · "
+                f"cash ${lab['cash_usd']:,.0f} / products ${lab['products_usd']:,.0f} / "
+                f"credits ${lab['credits_usd']:,.0f} · {lab['reason']} Winners: {lab['winner_notes']}")
         lines.append("")
     out.write_text("\n".join(lines))
     print(f"\nreview file: {out}")
@@ -218,12 +304,11 @@ def full_run(conn, model: str, workers: int, max_cost: float, snapshot_path: str
                                          workers, prog, max_cost):
         lab = lab or {}
         errors += bool(error)
-        conn.execute(
-            "INSERT OR REPLACE INTO event_labels VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (run_id, hid, lab.get("cash_usd"), lab.get("gift_cards_usd"), lab.get("credits_usd"),
-             lab.get("products_usd"), lab.get("crypto_tokens_usd"), json.dumps(lab.get("opportunities", [])),
-             lab.get("opportunity_strength"), lab.get("sponsor_known"), lab.get("legit"), lab.get("inflated"),
-             lab.get("reason"), lab.get("verdict"), cost, error))
+        row = {"run_id": run_id, "hackathon_id": hid, "cost": cost, "error": error,
+               **{k: lab.get(k) for k in LABEL_COLUMNS}}
+        row["opportunities"] = json.dumps(lab.get("opportunities", []))
+        conn.execute(f"INSERT OR REPLACE INTO event_labels ({', '.join(row)}) "
+                     f"VALUES ({', '.join('?' * len(row))})", list(row.values()))
         conn.commit()
     prog.done()
     left = conn.execute("SELECT COUNT(*) FROM hackathons WHERE submissions_count > 0 AND id NOT IN "
@@ -232,9 +317,9 @@ def full_run(conn, model: str, workers: int, max_cost: float, snapshot_path: str
         conn.execute("UPDATE enrich_runs SET finished_at=? WHERE run_id=?",
                      (datetime.now(timezone.utc).isoformat(), run_id))
         conn.commit()
-    counts = dict(conn.execute("SELECT verdict, COUNT(*) FROM event_labels WHERE run_id=? AND error IS NULL "
-                               "GROUP BY verdict", (run_id,)).fetchall())
+    counts = dict(conn.execute("SELECT grade, COUNT(*) FROM event_labels WHERE run_id=? AND error IS NULL "
+                               "GROUP BY grade", (run_id,)).fetchall())
     cost = conn.execute("SELECT SUM(cost) FROM event_labels WHERE run_id=?", (run_id,)).fetchone()[0] or 0
-    print(f"{run_id}: " + ", ".join(f"{counts.get(v, 0)} {v}" for v in ("worth", "maybe", "skip"))
+    print(f"{run_id}: grades " + ", ".join(f"{g} {counts.get(g, 0)}" for g in "ABCD")
           + f" · ${cost:.2f} · {errors} errors" + (f" · {left} left, re-run to finish" if left else ""))
     return run_id

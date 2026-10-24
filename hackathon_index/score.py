@@ -29,7 +29,7 @@ def flags_for(e: dict, org_events: int, winners: list[tuple[int, int]],
             f["llm_skip"] = 4             # no meaningful reward, or not legit
         elif label["verdict"] == "maybe":
             f["llm_maybe"] = 2
-        if label["sponsor_known"] == 2:
+        if (label.get("sponsor_caliber") or 0) >= 8 or label.get("sponsor_known") == 2:
             f["major_sponsor"] = -1
     elif cash == 0:
         f["no_cash"] = 4                  # only swag, gift cards or credits found in the prizes

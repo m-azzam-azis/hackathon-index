@@ -36,7 +36,7 @@ git clone https://github.com/m-azzam-azis/hackathon-index && cd hackathon-index
    Go further back: add an earlier year
    Sample non-winners: full pages for a balanced sample
    Re-parse saved pages (after a parser update, no network)
-   Label events with an LLM: real prize value and legitimacy
+   Grade events with an LLM: winners, stakes, sponsors, competition
    Score events: flag junk and swag-only events
    Snapshots: list, save, or restore a copy of the database
    Quit
@@ -89,7 +89,18 @@ Filters are deliberately loose so small but real events aren't dropped. Separati
 | `no_judges`, `one_off_organizer`, `weak_winner_writeups`, `winners_without_code` | +1 each | weaker signals |
 | `managed_by_devpost` / `repeat_organizer` | −2 / −1 | trust signals |
 
-**LLM event labels.** Rules can't tell a Logitech hackathon paying in real hardware, or a Google one offering time with their team, from a gift card at a no-name event. So one LLM call per event reads every prize block plus organizer, judges and field size, and returns cash, gift cards, credits, products and token prizes separately, the opportunities on offer, whether the sponsor is a known company, a legitimacy score, and whether the headline is padded. A plain rule turns that into `worth`, `maybe` or `skip`: any meaningful reward counts (≥ $1k of money or products, or a real opportunity from a major sponsor), not only cash. Scoring then uses these labels in place of the rough cash and organizer rules. It works with any OpenAI-compatible API; the key goes in a git-ignored `.env` file (`OPENROUTER_API_KEY=...`). Test first: `label-events --sample 30` labels a spread of events with three cheap models and writes a side-by-side review file without touching the database. A full run (about 1,400 events) costs well under a dollar with a flash-class model, stops at `--max-cost`, and resumes if interrupted.
+**LLM event grades.** A legit event isn't automatically worth learning from: a well-run campus weekend whose prizes are stock partner swag teaches little about winning a big online challenge. So one LLM call per event reads every prize block, the organizer, judges and field size, and the top three winners' writeups. It returns what the prizes are really worth (cash, gift cards, credits, products and token prizes separately, so real hardware isn't mistaken for swag and a padded headline is caught) and four 0–10 scores. A fixed weighting turns them into a 0–100 quality score and an A–D grade:
+
+| Score | Weight | Question |
+|---|---|---|
+| `winner_quality` | 35% | how impressive are the winning projects by today's online standards? |
+| `stakes` | 25% | how much is winning worth, and is it a few real prizes or many token ones? |
+| `sponsor_caliber` | 20% | how significant are the companies funding and judging the main prizes? |
+| `competition` | 20% | how hard was it to win: field size, online vs local, professional vs student? |
+
+Stock partner prizes cost 5 points and an unverifiable event is capped at 20. Scoring then uses the grades in place of the rough cash and organizer rules. The client works with any OpenAI-compatible API, and the key goes in a git-ignored `.env` file (`OPENROUTER_API_KEY=...`).
+
+Test before a full run: `label-events --sample 30` grades a spread of events with three cheap models and writes a side-by-side review file without touching the database. Hackathons listed in `anchors.txt` (see `anchors.example.txt`) are always included, and the review counts how many each model agrees with. A full run over about 1,400 events reads around 2.3M tokens, well under a dollar with a flash-class model. It stops at `--max-cost` and resumes if interrupted.
 
 **Snapshots.** `score`, `label-events`, `--reparse` and `restore` each save a full copy of `index.db` to `data/snapshots/` first (about 270 MB each today). Delete old copies by hand when space matters.
 
@@ -102,7 +113,7 @@ Everything the menu does is also a command. `./run.sh <command>` and `hackathon-
 | `menu` | the interactive menu (default for `./run.sh` in a terminal) |
 | `status` | what's collected so far |
 | `crawl {list,overview,gallery,categories,projects,all}` | run one stage, or all of them in order |
-| `label-events [--sample N] [--model M]` | LLM labels per event; `--sample` writes a review file only |
+| `label-events [--sample N] [--model M]` | LLM grade per event; `--sample` writes a review file only |
 | `score` | junk-event scoring; a new run each time, earlier runs kept |
 | `snapshot [label]` · `snapshots` · `restore NAME` | save, list, and go back to copies of the database |
 
@@ -135,7 +146,7 @@ Everything lands in `data/index.db` (SQLite). Open it with `sqlite3`, DB Browser
 | `people`, `project_members` | Devpost profiles, for builder track records |
 | `pages` | every fetched URL: status, time, path of the gzipped body |
 | `enrich_runs` | each cleaning run: step, rules version, parameters, snapshot taken before it |
-| `event_labels` | each event's LLM label in each run (`event_labels_latest` view) |
+| `event_labels` | each event's LLM grade in each run: prize values, four scores, quality, grade (`event_labels_latest` view) |
 | `event_scores` | each event's junk score in each run (`event_scores_latest` view) |
 
 ## Project layout
@@ -149,7 +160,7 @@ hackathon_index/
   progress.py          one-line live progress
   money.py             currency amounts in prize text
   llm.py               OpenAI-compatible client (OpenRouter by default), .env loading
-  label_events.py      LLM labels per event
+  label_events.py      LLM grade per event
   score.py             junk-event scoring
   snapshot.py          database copies and restore
   sources/devpost/

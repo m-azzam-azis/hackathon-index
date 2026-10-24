@@ -1,0 +1,5 @@
+# Copy to anchors.txt and list hackathons you already have an opinion on.
+# `+` = great (worth learning from), `-` = meh. A Devpost URL or part of the title.
+# Anchors always join `label-events --sample`, and the review file shows how many each model agrees with.
++ https://hypermode-knowledge-graph-ai.devpost.com/
+- Hack@CEWIT 2023
