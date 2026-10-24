@@ -131,7 +131,8 @@ CREATE TABLE IF NOT EXISTS enrich_runs (
     rules       TEXT,                   -- version of the step's rules
     params      TEXT,                   -- JSON
     snapshot    TEXT,                   -- database copy taken just before the run
-    created_at  TEXT
+    created_at  TEXT,
+    finished_at TEXT                    -- NULL while a run can still be resumed
 );
 
 CREATE TABLE IF NOT EXISTS event_scores (
@@ -147,6 +148,32 @@ CREATE TABLE IF NOT EXISTS event_scores (
 CREATE VIEW IF NOT EXISTS event_scores_latest AS
     SELECT e.* FROM event_scores e
     WHERE e.run_id = (SELECT run_id FROM enrich_runs WHERE step = 'score' ORDER BY created_at DESC LIMIT 1);
+
+-- LLM labels per event (label_events.py): what the prizes are really worth, and legitimacy.
+CREATE TABLE IF NOT EXISTS event_labels (
+    run_id                TEXT NOT NULL REFERENCES enrich_runs(run_id),
+    hackathon_id          INTEGER NOT NULL REFERENCES hackathons(id),
+    cash_usd              REAL,
+    gift_cards_usd        REAL,
+    credits_usd           REAL,
+    products_usd          REAL,
+    crypto_tokens_usd     REAL,
+    opportunities         TEXT,         -- JSON list
+    opportunity_strength  INTEGER,      -- 0 none .. 3 strong
+    sponsor_known         INTEGER,      -- 0 unknown, 1 niche, 2 major
+    legit                 INTEGER,      -- 0-100
+    inflated              INTEGER,      -- headline padded with credits, swag or per-participant pools
+    reason                TEXT,
+    verdict               TEXT,         -- worth | maybe | skip
+    cost                  REAL,         -- USD for this call
+    error                 TEXT,
+    PRIMARY KEY (run_id, hackathon_id)
+);
+
+CREATE VIEW IF NOT EXISTS event_labels_latest AS
+    SELECT l.* FROM event_labels l
+    WHERE l.error IS NULL
+      AND l.run_id = (SELECT run_id FROM enrich_runs WHERE step = 'events' ORDER BY created_at DESC LIMIT 1);
 
 CREATE TABLE IF NOT EXISTS project_members (
     project_id  INTEGER NOT NULL REFERENCES projects(id),
@@ -169,7 +196,11 @@ def connect(path: Path, threads: bool = False) -> sqlite3.Connection:
 
 
 # Columns added after the first release; ALTER TABLE for databases created before them.
-_ADDED_COLUMNS = {"hackathons": {"categories_done": "INTEGER"}, "projects": {"video_urls": "TEXT"}}
+_ADDED_COLUMNS = {
+    "hackathons": {"categories_done": "INTEGER"},
+    "projects": {"video_urls": "TEXT"},
+    "enrich_runs": {"finished_at": "TEXT"},
+}
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -179,6 +210,16 @@ def _migrate(conn: sqlite3.Connection) -> None:
             if col not in have:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {kind}")
     conn.commit()
+
+
+def new_run_id(conn: sqlite3.Connection, step: str, now) -> str:
+    """e.g. score-20261024-053000; suffixed -2, -3 if two runs start within a second."""
+    base = run_id = f"{step}-{now:%Y%m%d-%H%M%S}"
+    n = 1
+    while conn.execute("SELECT 1 FROM enrich_runs WHERE run_id=?", (run_id,)).fetchone():
+        n += 1
+        run_id = f"{base}-{n}"
+    return run_id
 
 
 def upsert(conn: sqlite3.Connection, table: str, row: dict, keys: tuple[str, ...]) -> int:

@@ -36,6 +36,7 @@ git clone https://github.com/m-azzam-azis/hackathon-index && cd hackathon-index
    Go further back: add an earlier year
    Sample non-winners: full pages for a balanced sample
    Re-parse saved pages (after a parser update, no network)
+   Label events with an LLM: real prize value and legitimacy
    Score events: flag junk and swag-only events
    Snapshots: list, save, or restore a copy of the database
    Quit
@@ -74,7 +75,7 @@ Filters are deliberately loose so small but real events aren't dropped. Separati
 
 **Non-winner sampling.** The sample is keyed on project URLs, not database ids. The same event always yields the same picks, new events never change old ones, and raising the cap only adds projects. Huge events stay bounded: a 600-entry event gets 40 non-winners, not 90.
 
-**Cash estimate.** A prize block labelled "$X in cash" counts as cash with high confidence. Otherwise amounts are pulled from the prize text, skipping ones followed by "credits", "gift card", "worth of" and the like, and the estimate is marked low confidence. A proper cash / credits / swag classification is on the roadmap.
+**Cash estimate.** A prize block labelled "$X in cash" counts as cash with high confidence. Otherwise amounts are pulled from the prize text, skipping ones followed by "credits", "gift card", "worth of" and the like, and the estimate is marked low confidence. It only decides which galleries to crawl; the LLM event labels below give the real split.
 
 **Junk scoring.** Weighted flags per event, summed into `ok` (≤ 1), `watch` (2–3) or `junk` (≥ 4). Nothing is excluded; analysis filters on the tier.
 
@@ -88,7 +89,9 @@ Filters are deliberately loose so small but real events aren't dropped. Separati
 | `no_judges`, `one_off_organizer`, `weak_winner_writeups`, `winners_without_code` | +1 each | weaker signals |
 | `managed_by_devpost` / `repeat_organizer` | −2 / −1 | trust signals |
 
-**Snapshots.** `score`, `--reparse` and `restore` each save a full copy of `index.db` to `data/snapshots/` first (about 270 MB each today). Delete old copies by hand when space matters.
+**LLM event labels.** Rules can't tell a Logitech hackathon paying in real hardware, or a Google one offering time with their team, from a gift card at a no-name event. So one LLM call per event reads every prize block plus organizer, judges and field size, and returns cash, gift cards, credits, products and token prizes separately, the opportunities on offer, whether the sponsor is a known company, a legitimacy score, and whether the headline is padded. A plain rule turns that into `worth`, `maybe` or `skip`: any meaningful reward counts (≥ $1k of money or products, or a real opportunity from a major sponsor), not only cash. Scoring then uses these labels in place of the rough cash and organizer rules. It works with any OpenAI-compatible API; the key goes in a git-ignored `.env` file (`OPENROUTER_API_KEY=...`). Test first: `label-events --sample 30` labels a spread of events with three cheap models and writes a side-by-side review file without touching the database. A full run (about 1,400 events) costs well under a dollar with a flash-class model, stops at `--max-cost`, and resumes if interrupted.
+
+**Snapshots.** `score`, `label-events`, `--reparse` and `restore` each save a full copy of `index.db` to `data/snapshots/` first (about 270 MB each today). Delete old copies by hand when space matters.
 
 ## Commands
 
@@ -99,6 +102,7 @@ Everything the menu does is also a command. `./run.sh <command>` and `hackathon-
 | `menu` | the interactive menu (default for `./run.sh` in a terminal) |
 | `status` | what's collected so far |
 | `crawl {list,overview,gallery,categories,projects,all}` | run one stage, or all of them in order |
+| `label-events [--sample N] [--model M]` | LLM labels per event; `--sample` writes a review file only |
 | `score` | junk-event scoring; a new run each time, earlier runs kept |
 | `snapshot [label]` · `snapshots` · `restore NAME` | save, list, and go back to copies of the database |
 
@@ -130,7 +134,9 @@ Everything lands in `data/index.db` (SQLite). Open it with `sqlite3`, DB Browser
 | `submission_categories` | prize category a project entered |
 | `people`, `project_members` | Devpost profiles, for builder track records |
 | `pages` | every fetched URL: status, time, path of the gzipped body |
-| `enrich_runs`, `event_scores` | each cleaning run, and each event's score in it (`event_scores_latest` view) |
+| `enrich_runs` | each cleaning run: step, rules version, parameters, snapshot taken before it |
+| `event_labels` | each event's LLM label in each run (`event_labels_latest` view) |
+| `event_scores` | each event's junk score in each run (`event_scores_latest` view) |
 
 ## Project layout
 
@@ -142,12 +148,14 @@ hackathon_index/
   fetcher.py           cached, adaptive, thread-safe HTTP fetcher
   progress.py          one-line live progress
   money.py             currency amounts in prize text
+  llm.py               OpenAI-compatible client (OpenRouter by default), .env loading
+  label_events.py      LLM labels per event
   score.py             junk-event scoring
   snapshot.py          database copies and restore
   sources/devpost/
     crawl.py           the five crawl stages and non-winner sampling
     parse.py           pure parsers: HTML/JSON in, dicts out
-tests/                 parsers, pipeline, fetcher, parallel crawl, scoring, menu
+tests/                 parsers, pipeline, fetcher, parallel crawl, labels, scoring, menu
 run.sh                 entry point: pull, set up .venv, run
 ```
 
@@ -162,7 +170,6 @@ The tests run offline: parsers against trimmed real pages, and the full pipeline
 
 ## Roadmap
 
-- Prize classification (cash, credits or swag) with an LLM over `prizes.description`
 - Project tagging: domain, sponsor tech used, kind of AI use
 - Win-rate analysis against the non-winner sample, by event size and sponsor
 - Datasette dashboard and natural-language querying (an LLM writes SQL, SQLite does the counting)

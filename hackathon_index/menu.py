@@ -29,6 +29,7 @@ def run(data: Path) -> None:
             "Go further back: add an earlier year",
             "Sample non-winners: full pages for a balanced sample",
             "Re-parse saved pages (after a parser update, no network)",
+            "Label events with an LLM: real prize value and legitimacy",
             "Score events: flag junk and swag-only events",
             "Snapshots: list, save, or restore a copy of the database",
             "Quit",
@@ -41,6 +42,7 @@ def run(data: Path) -> None:
             "Go further back": backfill,
             "Sample non-winners": sample,
             "Re-parse saved pages": reparse,
+            "Label events with an LLM": label_events,
             "Score events": lambda: ["score"],
             "Snapshots": lambda: snapshots(data),
         }[choice.split(":")[0].split(" (")[0]]()
@@ -89,6 +91,20 @@ def sample() -> list[str]:
     if None in (rate, lo, hi):
         return []
     return ["crawl", "all", "--loser-rate", rate, "--min-losers", lo, "--max-losers", hi, *speed()]
+
+
+def label_events() -> list[str]:
+    mode = questionary.select("Which run?", choices=[
+        "Test: 30 events with 3 models, writes a review file (a few cents)",
+        "Full run: every gallery event with one model (snapshot first, resumable)",
+    ]).ask()
+    if not mode:
+        return []
+    if mode.startswith("Test"):
+        return ["label-events", "--sample", "30"]
+    model = questionary.text("Model", default="deepseek/deepseek-v4.1-flash").ask()
+    cap = questionary.text("Stop after spending (USD)", default="3").ask()
+    return ["label-events", "--model", model, "--max-cost", cap] if model and cap else []
 
 
 def reparse() -> list[str]:

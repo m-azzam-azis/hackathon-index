@@ -4,6 +4,7 @@
     crawl      run one Devpost stage, or all of them in order
     status     what's collected so far
     score      junk-event scoring (a new run each time; earlier runs are kept)
+    label-events  LLM labels per event: real prize value, legitimacy (--sample N to test first)
     snapshot   save a copy of index.db;  snapshots  list them;  restore NAME  go back to one
 """
 
@@ -49,6 +50,13 @@ def main() -> None:
     sub.add_parser("menu")
     sub.add_parser("status")
     sub.add_parser("score")
+    le = sub.add_parser("label-events")
+    le.add_argument("--sample", type=int, help="test on N events; writes a review file, not the database")
+    le.add_argument("--compare", help="comma-separated models for --sample (default: three cheap ones)")
+    le.add_argument("--model", help="model for a full run (default: deepseek/deepseek-v4.1-flash)")
+    le.add_argument("--workers", type=int, default=16, help="parallel API calls")
+    le.add_argument("--max-cost", type=float, default=3.0, help="stop once this many USD are spent")
+    le.add_argument("--limit", type=int, help="label at most N events this run (it resumes later)")
     sn = sub.add_parser("snapshot")
     sn.add_argument("label", nargs="?", default="manual")
     sub.add_parser("snapshots")
@@ -68,7 +76,7 @@ def main() -> None:
     if args.cmd == "snapshot":
         snapshot.take(db_path, args.label)
         return
-    if args.cmd in ("score", "restore", "crawl"):
+    if args.cmd in ("score", "restore", "crawl", "label-events"):
         lock = take_lock(args.data)
     if args.cmd == "restore":
         print(f"restored {snapshot.restore(db_path, args.name).name}")
@@ -79,6 +87,15 @@ def main() -> None:
     if args.cmd == "score":
         from .score import score_events
         score_events(conn, str(snapshot.take(db_path, "before-score")))
+        return
+    if args.cmd == "label-events":
+        from . import label_events as le
+        if args.sample:
+            models = args.compare.split(",") if args.compare else ([args.model] if args.model else le.COMPARE_MODELS)
+            le.sample(conn, args.data, args.sample, models, args.workers, args.max_cost)
+        else:
+            snap = snapshot.take(db_path, "before-label-events")
+            le.full_run(conn, args.model or le.DEFAULT_MODEL, args.workers, args.max_cost, str(snap), args.limit)
         return
 
     if args.reparse:

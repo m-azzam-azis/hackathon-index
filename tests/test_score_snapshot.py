@@ -34,7 +34,6 @@ def test_runs_are_kept_and_snapshots_restore(tmp_path):
     first = score_events(conn, str(snapshot.take(db, "before-score")))
     conn.execute("UPDATE hackathons SET cash_usd_est = 50000")
     conn.commit()
-    import time; time.sleep(1.1)
     second = score_events(conn)
     rows = conn.execute("SELECT run_id, tier FROM event_scores ORDER BY run_id").fetchall()
     assert [r["run_id"] for r in rows] == [first, second]                 # both runs kept
