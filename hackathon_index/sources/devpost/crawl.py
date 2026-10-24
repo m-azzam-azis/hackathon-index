@@ -289,8 +289,12 @@ def crawl_projects(conn, fetcher: Fetcher, loser_rate: float, min_losers: int, m
         if pid not in seen:
             seen.add(pid)
             ordered.append(pid)
-    if not reparse:
-        done = {r[0] for r in conn.execute("SELECT id FROM projects WHERE detail_fetched = 1")}
+    done = {r[0] for r in conn.execute("SELECT id FROM projects WHERE detail_fetched = 1")}
+    if reparse:
+        # Re-parse every project page already fetched, whatever sample settings it was fetched
+        # under, and fetch nothing new: --reparse never touches the network here.
+        ordered = sorted(done)
+    else:
         ordered = [pid for pid in ordered if pid not in done]
     urls = {pid: conn.execute("SELECT url FROM projects WHERE id=?", (pid,)).fetchone()["url"] for pid in ordered}
     prog = Progress("projects", len(ordered), fetcher)
