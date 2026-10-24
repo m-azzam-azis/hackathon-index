@@ -39,6 +39,8 @@ git clone https://github.com/m-azzam-azis/hackathon-index && cd hackathon-index
    Grade events with an LLM: stakes, sponsors, competition
    Score events: flag junk and swag-only events
    Tag projects with an LLM: domain, AI use, originality, depth
+   Dashboard: browse, filter and search in your browser
+   Connect Claude: let Claude Code or Desktop query the data
    Snapshots: list, save, or restore a copy of the database
    Quit
 ```
@@ -65,7 +67,7 @@ flowchart LR
     P --> E[grade events<br/>LLM: stakes, sponsors]
     E --> S[score<br/>ok / watch / junk]
     S --> T[tag projects<br/>LLM, A/B events]
-    T --> N[next: win rates,<br/>dashboard]
+    T --> X[explore.db<br/>dashboard + Claude]
 ```
 
 | Stage | Fetches | For which events |
@@ -127,6 +129,12 @@ Test before a full run: `label-events --sample 30` grades a spread of events wit
 
 `tag-projects --sample 40` tests two models on batches that mix winners and non-winners, and reports how often a winner outscores a non-winner from the same batch (50% is a coin flip), how spread out the scores are, and the projected cost of a full run. The full run is resumable and stops at `--max-cost`.
 
+**Dashboard.** `./run.sh dashboard` rebuilds `data/explore.db` from `index.db` (about 15 seconds) and opens it in [Datasette](https://datasette.io) on localhost. `explore.db` is a flat, throwaway copy of the analysis set: `projects` (tags, scores, prizes won, repo and video links, team profiles), `events` (grade, prize split), `builders` (Devpost profiles with their wins), `traits` (within-event win gaps for every tag, flag and common technology) and a full-text index. Facets slice projects by grade, year, domain, AI role, form and sponsor-tech use, and ready-made queries cover what wins, what loses, technologies by win gap, winners built with a given technology, top builders and the best events to learn from.
+
+Win rates are always measured **within an event**: for each event with both winners and non-winners, the winners' share with a trait minus the non-winners' share, averaged with each event weighted by its smaller group. Non-winners are a capped sample, so raw rates would mostly reflect the sampling.
+
+**Ask Claude.** `./run.sh mcp-config` prints the line that registers a local [MCP](https://modelcontextprotocol.io) server with Claude Code, and the JSON for Claude Desktop. Claude then gets four read-only tools over the same data (`describe`, `sql`, `what_wins`, `search_projects`) and can answer questions like "what do winners of AWS challenges have in common?" on a normal Claude subscription, with no API key. Both databases are opened read-only and long queries are cut off.
+
 **Snapshots.** `score`, `label-events`, `tag-projects`, `--reparse` and `restore` each save a full copy of `index.db` to `data/snapshots/` first (about 270 MB each today). Delete old copies by hand when space matters.
 
 ## Commands
@@ -140,6 +148,8 @@ Everything the menu does is also a command. `./run.sh <command>` and `hackathon-
 | `crawl {list,overview,gallery,categories,projects,all}` | run one stage, or all of them in order |
 | `label-events [--sample N] [--model M]` | LLM grade per event; `--sample` writes a review file only |
 | `score` | junk-event scoring; a new run each time, earlier runs kept |
+| `dashboard [--port 8001]` | rebuild `explore.db` and open it in Datasette |
+| `mcp` · `mcp-config` | MCP server for Claude (stdio) · print how to register it |
 | `tag-projects [--sample N] [--model M] [--grades AB]` | LLM tags per project in A/B events; `--sample` writes a review file only |
 | `snapshot [label]` · `snapshots` · `restore NAME` | save, list, and go back to copies of the database |
 
@@ -190,6 +200,9 @@ hackathon_index/
   label_events.py      LLM grade per event
   score.py             junk-event scoring
   tag_projects.py      LLM tags per project
+  explore.py           explore.db: flat analysis tables and within-event win gaps
+  datasette.json       dashboard facets and ready-made queries
+  mcp_server.py        read-only MCP tools for Claude
   snapshot.py          database copies and restore
   sources/devpost/
     crawl.py           the five crawl stages and non-winner sampling
@@ -209,8 +222,9 @@ The tests run offline: parsers against trimmed real pages, and the full pipeline
 
 ## Roadmap
 
-- Win-rate analysis against the non-winner sample, by event size and sponsor
-- Datasette dashboard and natural-language querying (an LLM writes SQL, SQLite does the counting)
+- Win gaps split by event size, year and sponsor
+- Local embeddings for "projects like this one" search
+- Eligibility and rules text from the saved event pages
 - More sources: Lablab, DoraHacks, offline events
 
 ## Responsible use

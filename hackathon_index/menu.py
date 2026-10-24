@@ -32,6 +32,8 @@ def run(data: Path) -> None:
             "Grade events with an LLM: stakes, sponsors, competition",
             "Score events: flag junk and swag-only events",
             "Tag projects with an LLM: domain, AI use, originality, depth",
+            "Dashboard: browse, filter and search in your browser",
+            "Connect Claude: let Claude Code or Desktop query the data",
             "Snapshots: list, save, or restore a copy of the database",
             "Quit",
         ]).ask()
@@ -46,10 +48,12 @@ def run(data: Path) -> None:
             "Grade events with an LLM": label_events,
             "Score events": lambda: ["score"],
             "Tag projects with an LLM": tag_projects,
+            "Dashboard": lambda: ["dashboard"],
+            "Connect Claude": lambda: ["mcp-config"],
             "Snapshots": lambda: snapshots(data),
         }[choice.split(":")[0].split(" (")[0]]()
         if args:
-            execute(data, args, ask=args[0] not in ("status", "snapshots"))
+            execute(data, args, ask=args[0] not in ("status", "snapshots", "dashboard", "mcp-config"))
 
 
 def execute(data: Path, args: list[str], ask: bool = True) -> None:

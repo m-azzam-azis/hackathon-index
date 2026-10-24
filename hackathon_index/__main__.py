@@ -5,6 +5,9 @@
     status     what's collected so far
     score      junk-event scoring (a new run each time; earlier runs are kept)
     label-events  LLM labels per event: real prize value, legitimacy (--sample N to test first)
+    tag-projects  LLM tags per project in A/B events (--sample N to test first)
+    dashboard  build data/explore.db and open it in the browser (Datasette)
+    mcp        MCP server so Claude can query the index;  mcp-config  how to register it
     snapshot   save a copy of index.db;  snapshots  list them;  restore NAME  go back to one
 """
 
@@ -65,6 +68,11 @@ def main() -> None:
     tp.add_argument("--max-cost", type=float, default=15.0, help="stop once this many USD are spent")
     tp.add_argument("--limit", type=int, help="tag at most N batches of up to 8 projects this run (it resumes later)")
     tp.add_argument("--grades", default="AB", help="tag projects from events with these grades (default: AB)")
+    db = sub.add_parser("dashboard")
+    db.add_argument("--port", type=int, default=8001)
+    db.add_argument("--no-open", action="store_true", help="don't open the browser")
+    sub.add_parser("mcp")
+    sub.add_parser("mcp-config")
     sn = sub.add_parser("snapshot")
     sn.add_argument("label", nargs="?", default="manual")
     sub.add_parser("snapshots")
@@ -84,6 +92,15 @@ def main() -> None:
     if args.cmd == "snapshot":
         snapshot.take(db_path, args.label)
         return
+    if args.cmd == "mcp":
+        from . import mcp_server
+        return mcp_server.server(args.data).run()
+    if args.cmd == "mcp-config":
+        from . import mcp_server
+        print(mcp_server.config(args.data, sys.executable))
+        return
+    if args.cmd == "dashboard":
+        return dashboard(args.data, args.port, not args.no_open)
     if args.cmd in ("score", "restore", "crawl", "label-events", "tag-projects"):
         lock = take_lock(args.data)
     if args.cmd == "restore":
@@ -147,6 +164,20 @@ def main() -> None:
     except CrawlHalted as exc:
         print(f"\nhalted: {exc}")
     status(conn)
+
+
+def dashboard(data: Path, port: int, open_browser: bool) -> None:
+    import subprocess
+    from . import explore
+    db = explore.build(data)
+    meta = Path(__file__).with_name("datasette.json")
+    print(f"dashboard at http://127.0.0.1:{port}/explore  (Ctrl-C to stop)")
+    cmd = [sys.executable, "-m", "datasette", "serve", str(db), "--metadata", str(meta), "--port", str(port),
+           "--setting", "facet_time_limit_ms", "1000", "--setting", "sql_time_limit_ms", "5000"]
+    try:
+        subprocess.run(cmd + (["--open"] if open_browser else []), check=False)
+    except KeyboardInterrupt:
+        pass
 
 
 def take_lock(data: Path):

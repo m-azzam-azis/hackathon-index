@@ -1,0 +1,61 @@
+{
+  "title": "hackathon-index",
+  "description": "Past hackathons, their winners and a sample of non-winners. Non-winners are a capped sample, so compare winners with non-winners from the same event (the traits table does).",
+  "databases": {
+    "explore": {
+      "tables": {
+        "projects": {
+          "description": "Every tagged project from A and B events. Scores are relative to other projects from the same event, scored side by side.",
+          "facets": ["grade", "won", "year", "domain", "ai_role", "form", "sponsor_tech"],
+          "sort_desc": "combined",
+          "label_column": "title",
+          "size": 50
+        },
+        "events": {
+          "description": "Every event with its LLM grade (A-D), quality score and prize split.",
+          "facets": ["grade", "year", "event_type", "online", "tier"],
+          "sort_desc": "quality",
+          "label_column": "title"
+        },
+        "traits": {
+          "description": "Within-event gap: how much more often winners have the trait than non-winners from the same event, in percentage points.",
+          "facets": ["scope", "trait"],
+          "sort_desc": "within_event_gap"
+        },
+        "builders": {
+          "description": "Devpost profiles with at least one winning project. Wins are complete; entries are only those we fetched.",
+          "sort_desc": "wins_ab"
+        }
+      },
+      "queries": {
+        "what_wins": {
+          "title": "What wins (A and B events)",
+          "description": "Traits winners have more often than non-winners from the same event.",
+          "sql": "SELECT trait, value, within_event_gap, winner_rate, nonwinner_rate, projects, events FROM traits WHERE scope = 'A and B' AND projects >= 50 ORDER BY within_event_gap DESC LIMIT 40"
+        },
+        "what_loses": {
+          "title": "What loses (A and B events)",
+          "description": "Traits non-winners have more often than winners from the same event.",
+          "sql": "SELECT trait, value, within_event_gap, winner_rate, nonwinner_rate, projects, events FROM traits WHERE scope = 'A and B' AND projects >= 50 ORDER BY within_event_gap ASC LIMIT 40"
+        },
+        "technologies": {
+          "title": "Technologies by win gap",
+          "sql": "SELECT value AS technology, within_event_gap, winner_rate, nonwinner_rate, projects, events FROM traits WHERE scope = 'A and B' AND trait = 'built_with' ORDER BY within_event_gap DESC"
+        },
+        "winners_using": {
+          "title": "Winners built with a technology",
+          "description": "Type a technology as Devpost lists it, e.g. gemini, langchain, supabase.",
+          "sql": "SELECT title, url, event, grade, year, prizes, summary, combined, video_url, repo_url FROM projects WHERE won = 1 AND (',' || lower(replace(built_with, ', ', ',')) || ',') LIKE '%,' || lower(:tech) || ',%' ORDER BY grade, combined DESC"
+        },
+        "top_builders": {
+          "title": "Top builders by wins",
+          "sql": "SELECT username, profile_url, wins_ab, wins_all, projects_fetched, events, winning_projects FROM builders ORDER BY wins_ab DESC, wins_all DESC LIMIT 100"
+        },
+        "best_events": {
+          "title": "Best events to learn from",
+          "sql": "SELECT title, url, grade, quality, year, event_type, cash_usd, submissions, tagged_projects, grade_reason FROM events WHERE grade IN ('A', 'B') ORDER BY quality DESC"
+        }
+      }
+    }
+  }
+}
