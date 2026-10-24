@@ -63,7 +63,7 @@ def main() -> None:
     tp.add_argument("--model", help="model for a full run (default: anthropic/claude-haiku-5.5)")
     tp.add_argument("--workers", type=int, default=16, help="parallel API calls")
     tp.add_argument("--max-cost", type=float, default=15.0, help="stop once this many USD are spent")
-    tp.add_argument("--limit", type=int, help="tag at most N projects this run (it resumes later)")
+    tp.add_argument("--limit", type=int, help="tag at most N batches of up to 8 projects this run (it resumes later)")
     tp.add_argument("--grades", default="AB", help="tag projects from events with these grades (default: AB)")
     sn = sub.add_parser("snapshot")
     sn.add_argument("label", nargs="?", default="manual")

@@ -177,7 +177,8 @@ CREATE VIEW IF NOT EXISTS event_labels_latest AS
     WHERE l.error IS NULL
       AND l.run_id = (SELECT run_id FROM enrich_runs WHERE step = 'events' ORDER BY created_at DESC LIMIT 1);
 
--- LLM tags per project (tag_projects.py). The model isn't told who won.
+-- LLM tags per project (tag_projects.py), scored in batches from the same event. The model
+-- isn't told who won.
 CREATE TABLE IF NOT EXISTS project_tags (
     run_id           TEXT NOT NULL REFERENCES enrich_runs(run_id),
     project_id       INTEGER NOT NULL REFERENCES projects(id),
@@ -189,6 +190,8 @@ CREATE TABLE IF NOT EXISTS project_tags (
     originality      INTEGER,       -- 0-10
     technical_depth  INTEGER,       -- 0-10
     polish           INTEGER,       -- 0-10
+    batch_rank       INTEGER,       -- 1 = strongest of the projects scored side by side
+    batch_size       INTEGER,       -- how many projects from the event were in that batch
     specific_user    INTEGER,
     real_use         INTEGER,
     summary          TEXT,
@@ -230,6 +233,7 @@ _ADDED_COLUMNS = {
     "event_labels": {"event_type": "TEXT", "stock_prizes": "INTEGER", "stakes": "INTEGER",
                      "sponsor_caliber": "INTEGER", "competition": "INTEGER", "winner_quality": "INTEGER",
                      "winner_notes": "TEXT", "quality": "INTEGER", "grade": "TEXT"},
+    "project_tags": {"batch_rank": "INTEGER", "batch_size": "INTEGER"},
 }
 
 

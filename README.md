@@ -112,7 +112,7 @@ Two rules encode the researcher's own judgement: a company-run online challenge 
 
 Test before a full run: `label-events --sample 30` grades a spread of events with two cheap models and writes a side-by-side review file without touching the database. Hackathons listed in `anchors.txt` as great, ok or meh (see `anchors.example.txt`) are always included, and the review counts how many each model agrees with. A full run over about 1,400 events costs one to two dollars with a flash-class model. It stops at `--max-cost` and resumes if interrupted.
 
-**Project tags.** Every full project page from an event graded A or B (`--grades ABC` adds C), winners and sampled non-winners alike, gets one LLM call over its title, tagline, built-with list, writeup and the event's prize tracks. The model is never told who won, so both groups are tagged the same way and win rates compare like with like. It returns fixed-list tags and three scores:
+**Project tags.** Every full project page from an event graded A or B (`--grades ABC` adds C), winners and sampled non-winners alike, is tagged by an LLM. Projects go in shuffled batches of up to eight from the same event, so the model scores them side by side: scored alone, nearly every project lands on a 5–7, while a comparison spreads the scores and adjusts for how strong the event was. The model is never told who won, so both groups are tagged the same way and win rates compare like with like. Each project gets:
 
 | Field | Values |
 |---|---|
@@ -120,11 +120,12 @@ Test before a full run: `label-events --sample 30` grades a spread of events wit
 | `ai_role` | none, llm_wrapper, rag, agent, multi_agent, custom_ml, computer_vision, voice |
 | `form` | web_app, mobile_app, browser_extension, hardware, bot, game, ar_vr, api_library, data_analysis, other |
 | `sponsor_tech` | central, passing, none |
-| `originality`, `technical_depth`, `polish` | 0–10 each |
+| `originality`, `technical_depth`, `polish` | 0–10 each, relative to the rest of the batch |
+| `batch_rank`, `batch_size` | 1 = strongest of the projects scored together |
 | `specific_user`, `real_use` | names a specific user; shows real users, a pilot or a deployment |
 | `summary` | one plain sentence, for the dashboard and similarity search |
 
-`tag-projects --sample 40` tests two models on 20 winners and 20 non-winners and projects the cost of a full run; the full run is resumable and stops at `--max-cost`.
+`tag-projects --sample 40` tests two models on batches that mix winners and non-winners, and reports how often a winner outscores a non-winner from the same batch (50% is a coin flip), how spread out the scores are, and the projected cost of a full run. The full run is resumable and stops at `--max-cost`.
 
 **Snapshots.** `score`, `label-events`, `tag-projects`, `--reparse` and `restore` each save a full copy of `index.db` to `data/snapshots/` first (about 270 MB each today). Delete old copies by hand when space matters.
 
