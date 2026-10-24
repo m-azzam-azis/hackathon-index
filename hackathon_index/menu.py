@@ -102,7 +102,7 @@ def label_events() -> list[str]:
         return []
     if mode.startswith("Test"):
         return ["label-events", "--sample", "30"]
-    model = questionary.text("Model", default="deepseek/deepseek-v4.1-flash").ask()
+    model = questionary.text("Model", default="anthropic/claude-haiku-5.5").ask()
     cap = questionary.text("Stop after spending (USD)", default="3").ask()
     return ["label-events", "--model", model, "--max-cost", cap] if model and cap else []
 

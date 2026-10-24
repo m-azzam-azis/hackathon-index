@@ -23,7 +23,7 @@ from .llm import Client, LLMError
 from .progress import Progress
 
 PROMPT_VERSION = "3"  # 1: worth/maybe/skip; 2: 0-100 quality incl. winner quality; 3: event page only
-DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
+DEFAULT_MODEL = "anthropic/claude-haiku-5.5"
 COMPARE_MODELS = ["deepseek/deepseek-v4.1-flash", "anthropic/claude-haiku-5.5"]
 EVENT_TYPES = ("student_local", "student_online", "community", "company_challenge", "professional_open")
 
