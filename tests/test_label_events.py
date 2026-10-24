@@ -11,13 +11,13 @@ from hackathon_index.db import connect
 from hackathon_index.score import score_events
 
 ANSWERS = {  # by event title
-    "Logitech Build": {"products_usd": 6000, "event_type": "company_challenge", "winner_quality": 7,
-                       "stakes": 7, "sponsor_caliber": 9, "competition": 7, "legit": 90},
+    "Logitech Build": {"products_usd": 6000, "event_type": "company_challenge",
+                       "stakes": 6, "sponsor_caliber": 9, "competition": 7, "legit": 90},
     "Google Meetup": {"opportunities": ["meet the Google Cloud team"], "event_type": "professional_open",
-                      "winner_quality": 8, "stakes": 6, "sponsor_caliber": 10, "competition": 8, "legit": 85},
+                      "stakes": 7, "sponsor_caliber": 10, "competition": 8, "legit": 85},
     "Campus Weekend": {"products_usd": 400, "event_type": "student_local", "stock_prizes": True,
-                       "winner_quality": 3, "stakes": 3, "sponsor_caliber": 3, "competition": 3, "legit": 90},
-    "Bogus Fund": {"cash_usd": 10000, "winner_quality": 6, "stakes": 9, "sponsor_caliber": 1,
+                       "stakes": 3, "sponsor_caliber": 3, "competition": 3, "legit": 90},
+    "Bogus Fund": {"cash_usd": 10000, "event_type": "company_challenge", "stakes": 9, "sponsor_caliber": 1,
                    "competition": 2, "legit": 20, "inflated": True},
 }
 
@@ -52,6 +52,16 @@ def test_grades():
     # Hardware and opportunities count; a legit but stock-prize campus weekend and an
     # unverifiable big-money event both grade low.
     assert grades == {"Logitech Build": "B", "Google Meetup": "A", "Campus Weekend": "D", "Bogus Fund": "D"}
+
+
+def test_researcher_rules():
+    base = {"stakes": 4, "sponsor_caliber": 4, "competition": 4, "legit": 90}
+    # A small company-run online challenge with real cash still counts...
+    assert le.normalise({**base, "event_type": "company_challenge", "cash_usd": 10000})["grade"] == "B"
+    assert le.normalise({**base, "event_type": "company_challenge", "cash_usd": 1000})["grade"] == "C"
+    # ...and a student event tops out at B, however big.
+    top = {"stakes": 10, "sponsor_caliber": 10, "competition": 10, "legit": 90}
+    assert le.normalise({**top, "event_type": "student_local"})["grade"] == "B"
 
 
 def test_sample_writes_review_only(tmp_path, monkeypatch):

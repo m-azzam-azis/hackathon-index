@@ -29,7 +29,7 @@ def run(data: Path) -> None:
             "Go further back: add an earlier year",
             "Sample non-winners: full pages for a balanced sample",
             "Re-parse saved pages (after a parser update, no network)",
-            "Grade events with an LLM: winners, stakes, sponsors, competition",
+            "Grade events with an LLM: stakes, sponsors, competition",
             "Score events: flag junk and swag-only events",
             "Snapshots: list, save, or restore a copy of the database",
             "Quit",
@@ -95,7 +95,7 @@ def sample() -> list[str]:
 
 def label_events() -> list[str]:
     mode = questionary.select("Which run?", choices=[
-        "Test: 30 events + your anchors with 3 models, writes a review file (a few cents)",
+        "Test: 30 events + your anchors with 2 models, writes a review file (a few cents)",
         "Full run: every gallery event with one model (snapshot first, resumable)",
     ]).ask()
     if not mode:

@@ -1,11 +1,12 @@
 """LLM grades per event: how much there is to learn from it, 0-100.
 
-One call per event reads every prize block, the organizer, judges and field size, and the
-top winners' writeups. It returns what the prizes are really worth (cash, credits, products
+One call per event reads the event page as a person would: every prize block, the organizer,
+judges and field size. It returns what the prizes are really worth (cash, credits, products
 and opportunities separately, so real hardware isn't mistaken for swag and a "$40k
-participation prize" isn't mistaken for cash) and four 0-10 scores: winner quality, stakes,
-sponsor caliber and competition. A fixed weighting turns those into the quality score and an
-A-D grade. Legit isn't enough: a well-run local weekend with stock partner prizes grades low.
+participation prize" isn't mistaken for cash) and three 0-10 scores: stakes, sponsor caliber
+and competition. A fixed weighting plus two rules from the researcher's own judgement turn
+those into the quality score and an A-D grade. Winning projects are left out on purpose: they
+are what the analysis studies, so they shouldn't also decide which events count.
 
     label-events --sample 30 --compare a,b,c   test: review file only, the database is untouched
     label-events --model M                     full run: snapshot first, then a new versioned run
@@ -21,15 +22,15 @@ from .db import new_run_id
 from .llm import Client, LLMError
 from .progress import Progress
 
-PROMPT_VERSION = "2"  # 1: worth/maybe/skip from prizes; 2: 0-100 quality score incl. winner quality
+PROMPT_VERSION = "3"  # 1: worth/maybe/skip; 2: 0-100 quality incl. winner quality; 3: event page only
 DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
-COMPARE_MODELS = ["deepseek/deepseek-v4.1-flash", "z-ai/glm-5.3-flash", "anthropic/claude-haiku-5.5"]
+COMPARE_MODELS = ["deepseek/deepseek-v4.1-flash", "anthropic/claude-haiku-5.5"]
 EVENT_TYPES = ("student_local", "student_online", "community", "company_challenge", "professional_open")
 
 SYSTEM = """You grade past hackathons for a builder who wants to learn what wins strong, online,
 2026-level competitions. A legit event is not enough: a local student weekend whose prizes are
-stock partner swag teaches little, even if it was run well. Read the event, its prizes and its
-top winners, and answer with one JSON object and nothing else:
+stock partner swag teaches little, even if it was run well. Read the event and its prizes,
+and answer with one JSON object and nothing else:
 {
   "cash_usd": money paid to winners (cash, bank transfer, PayPal, stablecoins), in USD,
   "gift_cards_usd": gift cards, in USD,
@@ -48,27 +49,23 @@ top winners, and answer with one JSON object and nothing else:
       (10 = Google, AWS, Microsoft, OpenAI-level running their own track; 2 = small tool sponsors),
   "competition": 0-10, how hard it was to win: field size, open online vs local, professional
       vs student entrants,
-  "winner_quality": 0-10, how impressive the winning projects below are by today's standards
-      for an online hackathon: ambition, technical depth, polish, real use of sponsor tech
-      (10 = would stand out at a top online challenge in 2026; 3 = a standard weekend demo),
-  "winner_notes": one sentence on the winners,
   "legit": 0-100 confidence this is a real, fairly run competition,
   "inflated": true if headline amounts are padded (per-participant pools, "equivalent value",
       credits or swag counted as cash),
   "reason": one short sentence explaining the overall grade
 }
 Calibration from the researcher: open online challenges run by major tech companies, or by
-established developer-tool companies around their own product, are the gold standard. Student hackathons are middling at best: fine when they have several
+established developer-tool companies around their own product, are the gold standard, and
+that includes mid-size ones with a few dozen entries. Student hackathons are middling at best: fine when they have several
 real cash prizes or tracks run by big corporate sponsors (e.g. Goldman Sachs), weak when the
 prizes are only gadgets such as MacBooks and AirPods, and weakest when most tracks are stock
 partner prizes.
 
 Count each prize once; when a prize has several winners, multiply. Convert other currencies
-to USD. Use 0 when a kind of reward is absent. Judge winners on what the writeups show; don't
-reward length or buzzwords alone."""
+to USD. Use 0 when a kind of reward is absent."""
 
 
-def event_prompt(conn, h, winners: int = 3, writeup_chars: int = 1200) -> str:
+def event_prompt(conn, h) -> str:
     themes = ", ".join(json.loads(h["themes"] or "[]"))
     lines = [
         f"Title: {h['title']}",
@@ -88,23 +85,6 @@ def event_prompt(conn, h, winners: int = 3, writeup_chars: int = 1200) -> str:
     judges = conn.execute("SELECT name, title FROM judges WHERE hackathon_id=? LIMIT 8", (h["id"],)).fetchall()
     if judges:
         lines += ["", "Judges: " + "; ".join(f"{j['name']} ({j['title'] or '-'})" for j in judges)]
-
-    top = conn.execute(
-        "SELECT p.id, p.title, p.tagline, p.built_with, p.has_repo, p.has_video, p.writeup FROM submissions s "
-        "JOIN projects p ON p.id = s.project_id WHERE s.hackathon_id=? AND s.is_winner=1 "
-        "AND p.detail_fetched=1 AND p.writeup_chars > 200 ORDER BY s.gallery_rank LIMIT ?",
-        (h["id"], winners)).fetchall()
-    if top:
-        lines += ["", "Top winners:"]
-    for w in top:
-        won = [r[0] for r in conn.execute("SELECT prize_title FROM submission_prizes WHERE hackathon_id=? "
-                                          "AND project_id=?", (h["id"], w["id"]))]
-        text = " ".join(" ".join(f"{k}: {v}" for k, v in json.loads(w["writeup"] or "{}").items()).split())
-        built = ", ".join(json.loads(w["built_with"] or "[]")[:12])
-        lines += [f"* {w['title']}: {w['tagline'] or ''}",
-                  f"  won: {'; '.join(won) or '?'} · built with: {built or '-'} · "
-                  f"repo: {'yes' if w['has_repo'] else 'no'} · video: {'yes' if w['has_video'] else 'no'}",
-                  f"  {text[:writeup_chars]}"]
     return "\n".join(lines)
 
 
@@ -126,9 +106,8 @@ def normalise(a: dict) -> dict:
     out["opportunities"] = [str(o) for o in opps] if isinstance(opps, list) else [str(opps)]
     out["event_type"] = a.get("event_type") if a.get("event_type") in EVENT_TYPES else None
     out["stock_prizes"] = int(bool(a.get("stock_prizes")))
-    for k in ("stakes", "sponsor_caliber", "competition", "winner_quality"):
+    for k in ("stakes", "sponsor_caliber", "competition"):
         out[k] = _score10(a.get(k))
-    out["winner_notes"] = str(a.get("winner_notes") or "")[:300]
     out["legit"] = int(min(100, _num(a.get("legit"))))
     out["inflated"] = int(bool(a.get("inflated")))
     out["reason"] = str(a.get("reason") or "")[:300]
@@ -138,16 +117,23 @@ def normalise(a: dict) -> dict:
     return out
 
 
-WEIGHTS = {"winner_quality": 0.35, "stakes": 0.25, "sponsor_caliber": 0.20, "competition": 0.20}
+WEIGHTS = {"stakes": 0.40, "sponsor_caliber": 0.30, "competition": 0.30}
+COMPANY_TYPES = ("company_challenge", "professional_open")
 
 
 def quality(x: dict) -> int:
-    """0-100. Winner quality weighs most: it's what the researcher actually learns from."""
+    """0-100. On top of the weighting, the researcher's judgement: a company-run online
+    challenge with real cash is at least a B even when small, a student event is at most a B,
+    and an unverifiable event is capped at 20."""
     q = 10 * sum(x[k] * w for k, w in WEIGHTS.items())
-    if x["legit"] < 40:
-        q = min(q, 20)
     if x["stock_prizes"]:
         q -= 5
+    if x["event_type"] in COMPANY_TYPES and x["cash_usd"] >= 5000:
+        q = max(q, 60)
+    if (x["event_type"] or "").startswith("student"):
+        q = min(q, 70)
+    if x["legit"] < 40:
+        q = min(q, 20)
     return int(round(max(0, min(100, q))))
 
 
@@ -157,7 +143,7 @@ def grade(q: int) -> str:
 
 LABEL_COLUMNS = ("cash_usd", "gift_cards_usd", "credits_usd", "products_usd", "crypto_tokens_usd",
                  "opportunities", "event_type", "stock_prizes", "stakes", "sponsor_caliber", "competition",
-                 "winner_quality", "winner_notes", "legit", "inflated", "reason", "quality", "grade", "verdict")
+                 "legit", "inflated", "reason", "quality", "grade", "verdict")
 
 
 def _label(client: Client, prompt: str) -> tuple[dict | None, float, str | None]:
@@ -263,7 +249,7 @@ def sample(conn, data: Path, n: int, models: list[str], workers: int, max_cost: 
     out = data / "review" / f"events-sample-{datetime.now():%Y%m%d-%H%M%S}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     lines = [f"# Event grades: {len(events)} events ({len(expected)} of them your anchors)", "",
-             "Per model: **grade** (quality 0-100) · winners / stakes / sponsor / competition (0-10) · "
+             "Per model: **grade** (quality 0-100) · stakes / sponsor / competition (0-10) · "
              "event type · cash / products / credits (USD) · reason.",
              "Anchors agree when great → A/B, ok → B/C, meh → C/D.", "",
              "| Model | Cost | Errors | Anchors agreeing |", "|---|---|---|---|"]
@@ -279,11 +265,11 @@ def sample(conn, data: Path, n: int, models: list[str], workers: int, max_cost: 
                 lines.append(f"- **{model}**: error: {err}")
                 continue
             lines.append(
-                f"- **{model}**: **{lab['grade']}** ({lab['quality']}) · winners {lab['winner_quality']} / "
+                f"- **{model}**: **{lab['grade']}** ({lab['quality']}) · "
                 f"stakes {lab['stakes']} / sponsor {lab['sponsor_caliber']} / competition {lab['competition']} · "
                 f"{lab['event_type'] or '?'}{' · stock prizes' if lab['stock_prizes'] else ''} · "
                 f"cash ${lab['cash_usd']:,.0f} / products ${lab['products_usd']:,.0f} / "
-                f"credits ${lab['credits_usd']:,.0f} · {lab['reason']} Winners: {lab['winner_notes']}")
+                f"credits ${lab['credits_usd']:,.0f} · {lab['reason']}")
         lines.append("")
     out.write_text("\n".join(lines))
     print(f"\nreview file: {out}")

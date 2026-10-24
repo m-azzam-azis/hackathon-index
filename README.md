@@ -36,7 +36,7 @@ git clone https://github.com/m-azzam-azis/hackathon-index && cd hackathon-index
    Go further back: add an earlier year
    Sample non-winners: full pages for a balanced sample
    Re-parse saved pages (after a parser update, no network)
-   Grade events with an LLM: winners, stakes, sponsors, competition
+   Grade events with an LLM: stakes, sponsors, competition
    Score events: flag junk and swag-only events
    Snapshots: list, save, or restore a copy of the database
    Quit
@@ -97,18 +97,17 @@ Filters are deliberately loose so small but real events aren't dropped. Separati
 | `no_judges`, `one_off_organizer`, `weak_winner_writeups`, `winners_without_code` | +1 each | weaker signals |
 | `managed_by_devpost` / `repeat_organizer` | −2 / −1 | trust signals |
 
-**LLM event grades.** A legit event isn't automatically worth learning from: a well-run campus weekend whose prizes are stock partner swag teaches little about winning a big online challenge. So one LLM call per event reads every prize block, the organizer, judges and field size, and the top three winners' writeups. It returns what the prizes are really worth (cash, gift cards, credits, products and token prizes separately, so real hardware isn't mistaken for swag and a padded headline is caught) and four 0–10 scores. A fixed weighting turns them into a 0–100 quality score and an A–D grade:
+**LLM event grades.** A legit event isn't automatically worth learning from: a well-run campus weekend whose prizes are stock partner swag teaches little about winning a big online challenge. So one LLM call per event reads the event page the way a person would: every prize block, the organizer, judges and field size. It returns what the prizes are really worth (cash, gift cards, credits, products and token prizes separately, so real hardware isn't mistaken for swag and a padded headline is caught) and three 0–10 scores. A fixed weighting turns them into a 0–100 quality score and an A–D grade:
 
 | Score | Weight | Question |
 |---|---|---|
-| `winner_quality` | 35% | how impressive are the winning projects by today's online standards? |
-| `stakes` | 25% | how much is winning worth, and is it a few real prizes or many token ones? |
-| `sponsor_caliber` | 20% | how significant are the companies funding and judging the main prizes? |
-| `competition` | 20% | how hard was it to win: field size, online vs local, professional vs student? |
+| `stakes` | 40% | how much is winning worth, and is it a few real prizes or many token ones? |
+| `sponsor_caliber` | 30% | how significant are the companies funding and judging the main prizes? |
+| `competition` | 30% | how hard was it to win: field size, online vs local, professional vs student? |
 
-Stock partner prizes cost 5 points and an unverifiable event is capped at 20. Scoring then uses the grades in place of the rough cash and organizer rules. The client works with any OpenAI-compatible API, and the key goes in a git-ignored `.env` file (`OPENROUTER_API_KEY=...`).
+Two rules encode the researcher's own judgement: a company-run online challenge with at least $5k in cash is at least a B however small, and a student event is at most a B however big. Stock partner prizes cost 5 points and an unverifiable event is capped at 20. Winning projects are left out on purpose: they're what the analysis studies, so they shouldn't also decide which events count. Scoring then uses the grades in place of the rough cash and organizer rules. The client works with any OpenAI-compatible API, and the key goes in a git-ignored `.env` file (`OPENROUTER_API_KEY=...`).
 
-Test before a full run: `label-events --sample 30` grades a spread of events with three cheap models and writes a side-by-side review file without touching the database. Hackathons listed in `anchors.txt` as great, ok or meh (see `anchors.example.txt`) are always included, and the review counts how many each model agrees with. A full run over about 1,400 events reads around 2.3M tokens, well under a dollar with a flash-class model. It stops at `--max-cost` and resumes if interrupted.
+Test before a full run: `label-events --sample 30` grades a spread of events with two cheap models and writes a side-by-side review file without touching the database. Hackathons listed in `anchors.txt` as great, ok or meh (see `anchors.example.txt`) are always included, and the review counts how many each model agrees with. A full run over about 1,400 events costs one to two dollars with a flash-class model. It stops at `--max-cost` and resumes if interrupted.
 
 **Snapshots.** `score`, `label-events`, `--reparse` and `restore` each save a full copy of `index.db` to `data/snapshots/` first (about 270 MB each today). Delete old copies by hand when space matters.
 
