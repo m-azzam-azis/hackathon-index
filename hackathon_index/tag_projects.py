@@ -25,7 +25,7 @@ from .progress import Progress
 
 PROMPT_VERSION = "2"  # 1: one project per call; 2: batches from the same event, scored side by side
 DEFAULT_MODEL = "anthropic/claude-haiku-5.5"
-COMPARE_MODELS = ["anthropic/claude-haiku-5.5", "anthropic/claude-sonnet-5.5"]
+COMPARE_MODELS = ["anthropic/claude-haiku-5.5", "deepseek/deepseek-v4.1-flash"]  # cheap tier only, never Sonnet or above
 BATCH = 8
 
 DOMAINS = ("health", "education", "fintech", "climate", "accessibility", "devtools", "productivity",

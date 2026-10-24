@@ -111,7 +111,7 @@ def label_events() -> list[str]:
 
 def tag_projects() -> list[str]:
     mode = questionary.select("Which run?", choices=[
-        "Test: about 40 projects with Haiku and Sonnet, writes a review file (about 25 cents)",
+        "Test: about 40 projects with 2 cheap models, writes a review file (a few cents)",
         "Full run: every project in an A or B event with one model (snapshot first, resumable)",
     ]).ask()
     if not mode:
