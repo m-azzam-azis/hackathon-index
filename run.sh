@@ -6,7 +6,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-git pull --ff-only -q 2>/dev/null || echo "(couldn't pull latest code; running what's here)"
+if ! git pull --ff-only -q 2>/dev/null; then
+  echo "!! Couldn't update the code, so this runs the old version. $(git status -sb | head -1)"
+  echo "!! If it says 'ahead', you have local commits: see 'Updating' in the README."
+fi
 [ -d .venv ] || python3 -m venv .venv
 source .venv/bin/activate
 pip install -q -e . >/dev/null

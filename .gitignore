@@ -4,3 +4,6 @@ __pycache__/
 .venv/
 .pytest_cache/
 .env
+*.egg-info/
+.DS_Store
+anchors.txt

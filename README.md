@@ -44,6 +44,14 @@ git clone https://github.com/m-azzam-azis/hackathon-index && cd hackathon-index
 
 Each choice prints its command line (for example `./run.sh crawl all --since 2022-01-01`) and asks before running it. On macOS the laptop is kept awake while crawling.
 
+### Updating
+
+`./run.sh` pulls the latest code each time. If you've committed locally, the pull can't fast-forward and the old code runs (it warns you). To go back to the published version, keeping your data, `.env` and `anchors.txt` (none of them are tracked):
+
+```bash
+git fetch && git reset --hard origin/main
+```
+
 ## Pipeline
 
 ```mermaid
