@@ -17,7 +17,7 @@ def answer_for(prompt):
     items = []
     for n, title in re.findall(r"### Project (\d+): (.+)", prompt):
         best = title in ("Project 1", "Project 5")
-        items.append({"n": int(n), "domain": "health", "ai_role": "agent", "form": "web_app",
+        items.append({"n": int(n), "title": title, "domain": "health", "ai_role": "agent", "form": "web_app",
                       "sponsor_tech": "central", "originality": 9 if best else 3, "technical_depth": 8 if best else 4,
                       "polish": 7 if best else 2, "rank": 1 if best else 2, "specific_user": True,
                       "real_use": False, "summary": f"{title} triages patients."})
@@ -88,12 +88,71 @@ def test_full_run_resumes(tmp_path, monkeypatch):
     assert conn.execute("SELECT finished_at FROM enrich_runs WHERE run_id=?", (first,)).fetchone()[0]
 
 
+class Fake:
+    """Replies with each answer in turn, counting calls."""
+    def __init__(self, *answers):
+        self.answers, self.calls = list(answers), 0
+
+    def json(self, system, user, max_tokens):
+        self.calls += 1
+        return self.answers[min(self.calls, len(self.answers)) - 1], {"cost": 0.001}
+
+
+BATCH = [(10, "GeoTaste", "GeoTaste maps business opportunities by neighbourhood with Qloo and Mapbox"),
+         (11, "MedPrompt AI", "MedPrompt AI checks symptoms and finds first aid help fast"),
+         (12, "Zesty", "Zesty flips your feed into an unrecommendation engine of opposite tastes")]
+
+
+def reply(*rows):
+    return {"projects": [{"n": n, "title": t, "summary": s, "domain": "other"} for n, t, s in rows]}
+
+
 def test_incomplete_reply_is_an_error():
-    class Fake:
-        def json(self, system, user, max_tokens):
-            return {"projects": [{"n": 1, "domain": "health"}]}, {"cost": 0.001}
-    tags, cost, error = tp._tag(Fake(), ("prompt", [10, 11]))
-    assert tags is None and "1 of 2" in error
+    fake = Fake({"projects": [{"n": 1, "title": "GeoTaste", "domain": "health"}]})
+    tags, cost, error = tp._tag(fake, ("prompt", BATCH))
+    assert tags is None and "1 of 3" in error and fake.calls == tp.ATTEMPTS
+
+
+def test_answer_on_the_wrong_project_is_retried_then_kept():
+    shifted = reply((1, "MedPrompt AI", "Checks symptoms and finds first aid."),
+                    (2, "Zesty", "An unrecommendation engine."), (3, "GeoTaste", "Maps business opportunities."))
+    right = reply((1, "GeoTaste", "Maps business opportunities by neighbourhood with Qloo."),
+                  (2, "MedPrompt AI", "Checks symptoms and finds first aid help."),
+                  (3, "Zesty", "An unrecommendation engine of opposite tastes."))
+    fake = Fake(shifted, right)
+    tags, cost, error = tp._tag(fake, ("prompt", BATCH))
+    assert error is None and fake.calls == 2 and round(cost, 3) == 0.002
+    assert "Qloo" in tags[10]["summary"]
+
+
+def test_summary_that_reads_like_a_neighbour_is_rejected():
+    # Titles echoed correctly, but GeoTaste's answer describes the first aid app.
+    swapped = reply((1, "GeoTaste", "Checks symptoms and finds first aid help fast."),
+                    (2, "MedPrompt AI", "Maps business opportunities by neighbourhood with Qloo and Mapbox."),
+                    (3, "Zesty", "An unrecommendation engine of opposite tastes."))
+    tags, _, error = tp._tag(Fake(swapped), ("prompt", BATCH))
+    assert tags is None and "GeoTaste" in error
+
+
+def test_title_matching():
+    assert tp.same_title("Riḥla", "Rihla") and tp.same_title("GeoTaste: Your Business Consultant Agent", "GeoTaste")
+    assert not tp.same_title("GeoTaste", "MedPrompt AI") and tp.same_title(".", "anything")
+
+
+def test_audit_finds_misplaced_summaries(tmp_path, monkeypatch):
+    conn = setup(tmp_path, monkeypatch, [], projects=4)
+    conn.execute("INSERT INTO enrich_runs (run_id, step, created_at) VALUES ('tags-1', 'tags', '2026')")
+    texts = {1: "solar flare forecasting from NASA satellite images", 2: "soil moisture sensors skip irrigation",
+             3: "voice tutor for blind students reading notes aloud"}
+    for pid, text in texts.items():
+        conn.execute("UPDATE projects SET writeup=? WHERE id=?", (json.dumps({"About": text}), pid))
+    summaries = {1: "Forecasts solar flares from satellite images.", 2: "Reads notes aloud for blind students.",
+                 3: "Soil moisture sensors decide when to skip irrigation."}
+    for pid, summary in summaries.items():
+        conn.execute("INSERT INTO project_tags (run_id, project_id, hackathon_id, summary) VALUES ('tags-1', ?, 1, ?)",
+                     (pid, summary))
+    total, suspect, ids = tp.audit(conn)
+    assert (total, suspect, sorted(ids)) == (3, 2, [2, 3])
 
 
 def test_normalise_rejects_unknown_values():

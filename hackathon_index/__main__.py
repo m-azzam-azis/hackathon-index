@@ -68,6 +68,7 @@ def main() -> None:
     tp.add_argument("--max-cost", type=float, default=15.0, help="stop once this many USD are spent")
     tp.add_argument("--limit", type=int, help="tag at most N batches of up to 8 projects this run (it resumes later)")
     tp.add_argument("--grades", default="AB", help="tag projects from events with these grades (default: AB)")
+    tp.add_argument("--check", action="store_true", help="audit the latest tags for answers on the wrong project")
     db = sub.add_parser("dashboard")
     db.add_argument("--port", type=int, default=8001)
     db.add_argument("--no-open", action="store_true", help="don't open the browser")
@@ -124,7 +125,11 @@ def main() -> None:
         return
     if args.cmd == "tag-projects":
         from . import tag_projects as tp
-        if args.sample:
+        if args.check:
+            total, suspect, _ = tp.audit(conn)
+            print(f"{suspect:,} of {total:,} tagged projects ({100 * suspect / max(total, 1):.1f}%) have a summary "
+                  "that reads like another project from the same event")
+        elif args.sample:
             models = args.compare.split(",") if args.compare else ([args.model] if args.model else tp.COMPARE_MODELS)
             tp.sample(conn, args.data, args.sample, models, args.workers, args.max_cost, args.grades.upper())
         else:

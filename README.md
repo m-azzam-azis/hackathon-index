@@ -129,6 +129,8 @@ Test before a full run: `label-events --sample 30` grades a spread of events wit
 
 `tag-projects --sample 40` tests two models on batches that mix winners and non-winners, and reports how often a winner outscores a non-winner from the same batch (50% is a coin flip), how spread out the scores are, and the projected cost of a full run. The full run is resumable and stops at `--max-cost`.
 
+In a batch the model can attach one project's answer to its neighbour's number. Every answer therefore echoes the project's title and a summary before the scores. A batch is retried, then failed, if a title doesn't match or a summary reads more like another project in the batch than its own (word overlap, weighted toward rare words). `tag-projects --check` runs the same overlap test over the latest tags. Before this check existed, about 6% of tags sat on the wrong project.
+
 **Dashboard.** `./run.sh dashboard` rebuilds `data/explore.db` from `index.db` (about 15 seconds) and opens it in [Datasette](https://datasette.io) on localhost. `explore.db` is a flat, throwaway copy of the analysis set: `projects` (tags, scores, prizes won, repo and video links, team profiles), `events` (grade, prize split), `builders` (Devpost profiles with their wins), `traits` (within-event win gaps for every tag, flag and common technology) and a full-text index. Facets slice projects by grade, year, domain, AI role, form and sponsor-tech use, and ready-made queries cover what wins, what loses, technologies by win gap, winners built with a given technology, top builders and the best events to learn from.
 
 Win rates are always measured **within an event**: for each event with both winners and non-winners, the winners' share with a trait minus the non-winners' share, averaged with each event weighted by its smaller group. Non-winners are a capped sample, so raw rates would mostly reflect the sampling.
@@ -150,7 +152,7 @@ Everything the menu does is also a command. `./run.sh <command>` and `hackathon-
 | `score` | junk-event scoring; a new run each time, earlier runs kept |
 | `dashboard [--port 8001]` | rebuild `explore.db` and open it in Datasette |
 | `mcp` · `mcp-config` | MCP server for Claude (stdio) · print how to register it |
-| `tag-projects [--sample N] [--model M] [--grades AB]` | LLM tags per project in A/B events; `--sample` writes a review file only |
+| `tag-projects [--sample N] [--model M] [--grades AB] [--check]` | LLM tags per project in A/B events; `--sample` writes a review file only, `--check` audits the latest tags |
 | `snapshot [label]` · `snapshots` · `restore NAME` | save, list, and go back to copies of the database |
 
 Useful `crawl` options:

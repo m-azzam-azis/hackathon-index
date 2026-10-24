@@ -10,10 +10,19 @@ graded A or B are tagged by default (`--grades ABC` adds C).
 
     tag-projects --sample 40 --compare a,b    test: review file only, the database is untouched
     tag-projects --model M [--grades AB]      full run: snapshot first, then a new versioned run
+    tag-projects --check                      audit the latest tags for answers on the wrong project
+
+In a batch the model can attach one project's answer to its neighbour's number, so every
+answer echoes the project's title and summary first, and a batch is retried and then failed
+when a title doesn't match or a summary reads like a different project in the batch.
 """
 
 import hashlib
 import json
+import math
+import re
+import unicodedata
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from itertools import combinations
 from pathlib import Path
@@ -23,10 +32,11 @@ from .label_events import _num, _run_all, _score10
 from .llm import Client, LLMError
 from .progress import Progress
 
-PROMPT_VERSION = "2"  # 1: one project per call; 2: batches from the same event, scored side by side
+PROMPT_VERSION = "3"  # 1: one per call; 2: batches from one event; 3: answers echo the title, checked
 DEFAULT_MODEL = "anthropic/claude-haiku-5.5"
 COMPARE_MODELS = ["anthropic/claude-haiku-5.5", "deepseek/deepseek-v4.1-flash"]  # cheap tier only, never Sonnet or above
 BATCH = 8
+ATTEMPTS = 2
 
 DOMAINS = ("health", "education", "fintech", "climate", "accessibility", "devtools", "productivity",
            "social", "gaming", "security", "commerce", "civic", "science", "other")
@@ -38,6 +48,8 @@ SPONSOR_TECH = ("central", "passing", "none")
 SYSTEM = f"""You tag hackathon projects for a study of what wins. You get several projects
 submitted to the same event. For each one, answer with one JSON object and nothing else:
 {{"projects": [{{"n": the project's number,
+  "title": the project's title exactly as given,
+  "summary": one plain sentence on what this project does,
   "domain": one of {", ".join(DOMAINS)},
   "ai_role": the most advanced way AI is actually used, one of {", ".join(AI_ROLES)}
       (llm_wrapper = prompts an LLM or a chatbot; rag = retrieval over the project's own data;
@@ -51,8 +63,9 @@ submitted to the same event. For each one, answer with one JSON object and nothi
   "polish": 0-10, how complete and convincing it looks from the writeup and links,
   "rank": 1 for the strongest entry overall in this batch, 2 for the next, and so on,
   "specific_user": true if it names a specific user or customer and their problem,
-  "real_use": true if it shows real users, a pilot, or a live deployment,
-  "summary": one plain sentence on what it does}}, ...]}}
+  "real_use": true if it shows real users, a pilot, or a live deployment}}, ...]}}
+
+Write each project's title and summary before its scores, and score only that project.
 
 Score the projects against each other and use the whole range: in a batch of several, the
 strongest should usually get 8-10 and the weakest 1-4 on each score, and no two projects
@@ -72,6 +85,17 @@ def _project_block(n: int, p, writeup_chars: int) -> str:
         f"team of {p['team_size'] or '?'}",
         text[:writeup_chars],
     ])
+
+
+def _text(p, writeup_chars: int = 2000) -> str:
+    """What the model read about a project, for checking that a summary belongs to it."""
+    writeup = " ".join(str(v) for v in json.loads(p["writeup"] or "{}").values())[:writeup_chars]
+    return f"{p['title']} {p['tagline'] or ''} {writeup} {' '.join(json.loads(p['built_with'] or '[]'))}"
+
+
+def job(conn, hackathon_id: int, projects: list) -> tuple[str, list[tuple]]:
+    """(prompt, [(project id, title, text)]) for one batch."""
+    return batch_prompt(conn, hackathon_id, projects), [(p["id"], p["title"], _text(p)) for p in projects]
 
 
 def batch_prompt(conn, hackathon_id: int, projects: list, writeup_chars: int = 2000) -> str:
@@ -105,28 +129,105 @@ def normalise(a: dict, size: int = 1) -> dict:
     }
 
 
+def _norm(title) -> str:
+    plain = unicodedata.normalize("NFKD", str(title or "")).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]", "", plain.lower())
+
+
+def same_title(given, echoed) -> bool:
+    """Exact after normalising, or one a prefix of the other (long titles get shortened).
+    A title with no letters or digits can't be checked, so it passes."""
+    a, b = _norm(given), _norm(echoed)
+    if not a:
+        return True
+    return a == b or (min(len(a), len(b)) >= 6 and (a.startswith(b) or b.startswith(a)))
+
+
+_STOP = set("the and for with from that this its are can into their them they user users using uses use "
+            "app apps project built your our you will which also more".split())
+
+
+def _words(text) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]+", str(text or "").lower()) if len(w) > 2 and w not in _STOP}
+
+
+def misattributed(texts: list[str], summaries: list[str], margin: float = 0.15, floor: float = 0.3) -> list[int]:
+    """Positions whose summary matches another project's text clearly better than its own.
+    Overlap is the share of the summary's words found in a text, weighted so that words used
+    by every project in the group count for little."""
+    docs = [_words(t) for t in texts]
+    df = Counter(w for d in docs for w in d)
+    weight = lambda w: math.log((len(docs) + 1) / (1 + df[w])) + 0.1
+
+    def overlap(summary, doc):
+        words = _words(summary)
+        total = sum(weight(w) for w in words)
+        return sum(weight(w) for w in words if w in doc) / total if total else 1.0
+
+    bad = []
+    for i, summary in enumerate(summaries):
+        own = overlap(summary, docs[i])
+        best = max((overlap(summary, d) for j, d in enumerate(docs) if j != i), default=0.0)
+        if best >= floor and best > own + margin:
+            bad.append(i)
+    return bad
+
+
 TAG_COLUMNS = ("domain", "ai_role", "form", "sponsor_tech", "originality", "technical_depth", "polish",
                "batch_rank", "batch_size", "specific_user", "real_use", "summary")
 
 
-def _tag(client: Client, prompt_and_ids: tuple) -> tuple[dict | None, float, str | None]:
-    """One batch. Returns ({project_id: tags}, cost, error)."""
-    prompt, ids = prompt_and_ids
-    try:
-        answer, usage = client.json(SYSTEM, prompt, max_tokens=8000)
-        items = answer.get("projects") if isinstance(answer, dict) else None
-        if not isinstance(items, list):
-            raise LLMError(f"no projects list in reply: {str(answer)[:150]}")
-        tags = {}
-        for item in items:
-            n = int(_num(item.get("n"))) if isinstance(item, dict) else 0
-            if 1 <= n <= len(ids):
-                tags[ids[n - 1]] = normalise(item, len(ids))
-        if len(tags) < len(ids):
-            raise LLMError(f"reply covered {len(tags)} of {len(ids)} projects")
-        return tags, _num(usage.get("cost")), None
-    except (LLMError, ValueError, TypeError) as exc:
-        return None, 0.0, str(exc)[:300]
+def _read_reply(answer, projects: list[tuple]) -> dict:
+    """{project_id: tags} from one reply, or LLMError when it is incomplete or an answer sits
+    on the wrong project."""
+    items = answer.get("projects") if isinstance(answer, dict) else None
+    if not isinstance(items, list):
+        raise LLMError(f"no projects list in reply: {str(answer)[:150]}")
+    tags = {}
+    for item in items:
+        n = int(_num(item.get("n"))) if isinstance(item, dict) else 0
+        if not 1 <= n <= len(projects):
+            continue
+        pid, title, _ = projects[n - 1]
+        if not same_title(title, item.get("title")):
+            raise LLMError(f"answer {n} is titled {str(item.get('title'))[:60]!r}, expected {title[:60]!r}")
+        tags[pid] = normalise(item, len(projects))
+    if len(tags) < len(projects):
+        raise LLMError(f"reply covered {len(tags)} of {len(projects)} projects")
+    wrong = misattributed([t for *_, t in projects], [tags[pid]["summary"] for pid, *_ in projects])
+    if wrong:
+        raise LLMError(f"summary of {projects[wrong[0]][1][:60]!r} reads like another project in the batch")
+    return tags
+
+
+def _tag(client: Client, job: tuple) -> tuple[dict | None, float, str | None]:
+    """One batch, retried once if the reply doesn't check out. Returns ({project_id: tags},
+    cost, error)."""
+    prompt, projects = job
+    cost, error = 0.0, None
+    for _ in range(ATTEMPTS):
+        try:
+            answer, usage = client.json(SYSTEM, prompt, max_tokens=8000)
+            cost += _num(usage.get("cost"))
+            return _read_reply(answer, projects), cost, None
+        except (LLMError, ValueError, TypeError) as exc:
+            error = str(exc)[:300]
+    return None, cost, error
+
+
+def audit(conn) -> tuple[int, int, list[int]]:
+    """(tagged, suspect, suspect project ids) for the latest tags: a summary that matches
+    another project from the same event better than its own."""
+    rows = conn.execute("SELECT t.project_id, t.hackathon_id, t.summary, p.* FROM project_tags_latest t "
+                        "JOIN projects p ON p.id = t.project_id WHERE t.error IS NULL").fetchall()
+    by_event = defaultdict(list)
+    for r in rows:
+        by_event[r["hackathon_id"]].append(r)
+    suspect = []
+    for group in by_event.values():
+        bad = misattributed([_text(r) for r in group], [r["summary"] for r in group])
+        suspect += [group[i]["project_id"] for i in bad]
+    return len(rows), len(suspect), suspect
 
 
 def targets(conn, grades: str = "AB") -> list[tuple]:
@@ -207,8 +308,7 @@ def sample(conn, data: Path, n: int, models: list[str], workers: int, max_cost: 
            grades: str = "AB") -> Path:
     """Tag a sample with each model and write a side-by-side review file. No DB writes."""
     picked = pick_sample(conn, n, grades)
-    jobs = [(i, (batch_prompt(conn, hid, [t[0] for t in rows]), [t[0]["id"] for t in rows]))
-            for i, (hid, rows) in enumerate(picked)]
+    jobs = [(i, job(conn, hid, [t[0] for t in rows])) for i, (hid, rows) in enumerate(picked)]
     count = sum(len(rows) for _, rows in picked)
     results, summary = {}, {}
     for model in models:
@@ -282,8 +382,7 @@ def full_run(conn, model: str, workers: int, max_cost: float, snapshot_path: str
     every = targets(conn, grades)
     done = tagged()
     todo = batches([t for t in every if t[0]["id"] not in done])[:limit]
-    jobs = [((hid, tuple(t[0]["id"] for t in rows)),
-             (batch_prompt(conn, hid, [t[0] for t in rows]), [t[0]["id"] for t in rows])) for hid, rows in todo]
+    jobs = [((hid, tuple(t[0]["id"] for t in rows)), job(conn, hid, [t[0] for t in rows])) for hid, rows in todo]
     prog = Progress("tag projects", len(jobs))
     errors = 0
     for (hid, ids), lab, cost, error in _run_all(Client(model), jobs, workers, prog, max_cost, label=_tag):
