@@ -8,6 +8,12 @@ from bs4 import BeautifulSoup
 
 from ...money import find_amounts, to_usd
 
+try:  # lxml is faster and gives identical results on Devpost pages; html.parser is the fallback
+    import lxml  # noqa: F401
+    PARSER = "lxml"
+except ImportError:
+    PARSER = "html.parser"
+
 SOURCE = "devpost"
 _MONTHS = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
 
@@ -90,7 +96,7 @@ def parse_listing_item(h: dict) -> dict:
 # ---------------------------------------------------------------- overview page
 
 def parse_overview(html: str) -> dict:
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, PARSER)
     prizes = []
     for pos, el in enumerate(soup.select("#prizes .prize")):
         value_el = el.select_one(".prize-value")
@@ -138,7 +144,7 @@ def estimate_cash(prizes: list[dict]) -> tuple[float, str]:
 # ---------------------------------------------------------------- gallery page
 
 def parse_gallery(html: str) -> dict:
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, PARSER)
     entries = []
     for el in soup.select(".gallery-item"):
         link = el.select_one("a.link-to-software, a.block-wrapper-link")
@@ -177,7 +183,7 @@ _SKIP_SECTIONS = {"Built With", "Try it out"}
 
 
 def parse_project(html: str) -> dict:
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, PARSER)
 
     submitted = []
     for li in soup.select("#submissions ul.software-list-with-thumbnail > li"):

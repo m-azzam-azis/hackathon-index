@@ -128,21 +128,25 @@ def test_loser_sample_is_stable_across_runs_and_new_events(tmp_path):
 
 
 def test_reparse_covers_every_fetched_page_and_fetches_nothing_new(tmp_path):
+    import gzip
     conn = connect(tmp_path / "index.db")
     conn.execute("INSERT INTO hackathons (id, source, source_id, url, submissions_count) "
                  "VALUES (1, 'devpost', '1', 'https://e.devpost.com/', 3)")
+    page = gzip.compress((FIX / "project.html").read_bytes())
     for i, (winner, fetched) in enumerate([(1, 1), (0, 1), (0, 0)]):
+        url = f"https://devpost.com/software/p{i}"
         conn.execute("INSERT INTO projects (id, source, url, writeup_chars, detail_fetched) "
-                     "VALUES (?, 'devpost', ?, 0, ?)", (i, f"https://devpost.com/software/p{i}", fetched))
+                     "VALUES (?, 'devpost', ?, 0, ?)", (i, url, fetched))
         conn.execute("INSERT INTO submissions VALUES (1, ?, ?, ?)", (i, i, winner))
-    got = []
+        if fetched:
+            path = tmp_path / f"p{i}.gz"
+            path.write_bytes(page)
+            conn.execute("INSERT INTO pages VALUES (?, 'devpost', 'project', 200, '', ?, NULL)", (url, str(path)))
 
-    class Cache:
-        def get(self, url, source, kind, refresh=False):
-            got.append(url)
-            return (FIX / "project.html").read_text()
+    class NoNetwork:
+        def get(self, *a, **kw):
+            raise AssertionError("reparse must not fetch")
 
     # Winners-only settings, yet the loser fetched by an earlier sample run is re-parsed too.
-    crawl.crawl_projects(conn, Cache(), loser_rate=0, min_losers=0, reparse=True)
-    assert sorted(got) == ["https://devpost.com/software/p0", "https://devpost.com/software/p1"]
-    assert conn.execute("SELECT COUNT(*) FROM projects WHERE writeup_chars > 0").fetchone()[0] == 2
+    crawl.crawl_projects(conn, NoNetwork(), loser_rate=0, min_losers=0, reparse=True)
+    assert [r[0] for r in conn.execute("SELECT id FROM projects WHERE writeup_chars > 0 ORDER BY id")] == [0, 1]

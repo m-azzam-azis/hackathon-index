@@ -7,14 +7,17 @@
     projects    full project pages: all winners + a sample of non-winners, balanced across categories
 
 Stages after `list` run items in parallel when the fetcher has workers > 1: threads only
-fetch and parse; every database write happens on the calling thread.
+fetch and parse; every database write happens on the calling thread. With --reparse, the
+overview and project stages read cached pages only and parse them on every CPU core.
 """
 
+import gzip
 import json
 import random
 import sqlite3
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, wait
 from datetime import date, timedelta
+from pathlib import Path
 
 from ...db import upsert
 from ...fetcher import Fetcher
@@ -96,6 +99,22 @@ def _parallel(items, fn, fetcher):
         pool.shutdown(wait=True, cancel_futures=True)
 
 
+def _parse_file(job):
+    parse_fn, path = job
+    if not path or not Path(path).exists():
+        return None
+    return parse_fn(gzip.decompress(Path(path).read_bytes()).decode("utf-8"))
+
+
+def _from_cache(conn, items, url_of, parse_fn):
+    """Yield (item, parse_fn(cached page) or None) using every CPU core. Never fetches:
+    parsing is CPU-bound, so processes beat the fetcher's threads by roughly the core count."""
+    paths = dict(conn.execute("SELECT url, path FROM pages WHERE status = 200").fetchall())
+    jobs = [(parse_fn, paths.get(url_of(item))) for item in items]
+    with ProcessPoolExecutor() as pool:
+        yield from zip(items, pool.map(_parse_file, jobs, chunksize=32))
+
+
 # ---------------------------------------------------------------- overview
 
 def crawl_overviews(conn, fetcher: Fetcher, limit: int | None = None, reparse: bool = False) -> None:
@@ -108,7 +127,9 @@ def crawl_overviews(conn, fetcher: Fetcher, limit: int | None = None, reparse: b
         html = fetcher.get(h["url"], SOURCE, "overview")
         return parse.parse_overview(html) if html is not None else None
 
-    for h, data in _parallel(rows, work, fetcher):
+    results = _from_cache(conn, rows, lambda h: h["url"], parse.parse_overview) if reparse \
+        else _parallel(rows, work, fetcher)
+    for h, data in results:
         prog.step(h["title"] or "")
         if data is None:
             continue
@@ -305,7 +326,9 @@ def crawl_projects(conn, fetcher: Fetcher, loser_rate: float, min_losers: int, m
 
     by_host = {parse.hackathon_key(r["url"]): r["id"] for r in conn.execute(
         "SELECT id, url FROM hackathons WHERE source=?", (SOURCE,))}
-    for pid, d in _parallel(ordered, work, fetcher):
+    results = _from_cache(conn, ordered, urls.get, parse.parse_project) if reparse \
+        else _parallel(ordered, work, fetcher)
+    for pid, d in results:
         prog.step(urls[pid].rsplit("/", 1)[-1])
         if d is None:
             continue

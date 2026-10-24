@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# One command for everything:
-#   ./run.sh            pull latest code, then crawl all stages (resumes where it stopped)
-#   ./run.sh status     just print what's collected so far
-#   ./run.sh score      junk-event scoring (also: snapshot, snapshots, restore NAME)
-#   ./run.sh --limit 10 any crawl option passes through (see README)
+# One entry point. Pulls the latest code and sets up .venv on first use, then:
+#   ./run.sh                     interactive menu
+#   ./run.sh status              any command: status, score, snapshots, restore NAME, crawl STAGE ...
+#   ./run.sh --loser-rate 0.15   options alone mean `crawl all` with those options
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -12,11 +11,15 @@ git pull --ff-only -q 2>/dev/null || echo "(couldn't pull latest code; running w
 source .venv/bin/activate
 pip install -q -e . >/dev/null
 
-case "${1:-}" in
-  status|score|snapshot|snapshots|restore) exec python -m hackathon_index "$@" ;;
-esac
+if [ $# -eq 0 ]; then
+  if [ -t 0 ]; then exec python -m hackathon_index menu; fi
+  set -- crawl all                     # no terminal (cron, scripts): plain update
+elif [[ "$1" == -* ]]; then
+  set -- crawl all "$@"
+fi
 
 # Keep the Mac awake while crawling (no-op elsewhere).
-KEEP_AWAKE=""
-command -v caffeinate >/dev/null && KEEP_AWAKE="caffeinate -i"
-exec $KEEP_AWAKE python -m hackathon_index crawl all "$@"
+if [ "$1" = "crawl" ] && command -v caffeinate >/dev/null; then
+  exec caffeinate -i python -m hackathon_index "$@"
+fi
+exec python -m hackathon_index "$@"

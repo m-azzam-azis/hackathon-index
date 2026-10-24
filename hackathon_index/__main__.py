@@ -1,7 +1,8 @@
-"""CLI.  python -m hackathon_index <command> [options]
+"""CLI.  hackathon-index <command> [options]   (or: python -m hackathon_index ...)
 
+    menu       interactive menu (what `./run.sh` opens with no arguments)
     crawl      run one Devpost stage, or all of them in order
-    status     row counts
+    status     what's collected so far
     score      junk-event scoring (a new run each time; earlier runs are kept)
     snapshot   save a copy of index.db;  snapshots  list them;  restore NAME  go back to one
 """
@@ -45,6 +46,7 @@ def main() -> None:
     c.add_argument("--interval", type=float, default=0.5, help="seconds between requests per worker (plus jitter)")
     c.add_argument("--reparse", action="store_true", help="re-parse already processed pages (from cache)")
 
+    sub.add_parser("menu")
     sub.add_parser("status")
     sub.add_parser("score")
     sn = sub.add_parser("snapshot")
@@ -56,6 +58,9 @@ def main() -> None:
 
     db_path = args.data / "index.db"
     args.data.mkdir(parents=True, exist_ok=True)
+    if args.cmd == "menu":
+        from . import menu
+        return menu.run(args.data)
     if args.cmd == "snapshots":
         for p in snapshot.listing(db_path):
             print(f"{p.name}  {p.stat().st_size / 1e6:.0f} MB")
@@ -119,21 +124,19 @@ def take_lock(data: Path):
 
 
 def status(conn) -> None:
-    q = lambda sql: conn.execute(sql).fetchone()[0]
-    print(
-        f"\nhackathons {q('SELECT COUNT(*) FROM hackathons')}"
-        f" | with prizes parsed {q('SELECT COUNT(*) FROM hackathons WHERE cash_usd_est IS NOT NULL')}"
-        f" | galleries {q('SELECT COUNT(*) FROM hackathons WHERE submissions_count > 0')}"
-        f"\nprojects {q('SELECT COUNT(*) FROM projects')}"
-        f" | winners {q('SELECT COUNT(*) FROM submissions WHERE is_winner = 1')}"
-        f" | full pages {q('SELECT COUNT(*) FROM projects WHERE detail_fetched = 1')}"
-        f" | events with categories {q('SELECT COUNT(*) FROM hackathons WHERE categories_done > 0')}"
-        f" | pages cached {q('SELECT COUNT(*) FROM pages WHERE status = 200')}"
-        f" | failed {q('SELECT COUNT(*) FROM pages WHERE status IS NULL OR status != 200')}"
-    )
-    tiers = conn.execute("SELECT tier, COUNT(*) FROM event_scores_latest GROUP BY tier").fetchall()
+    n = lambda sql: f"{conn.execute(sql).fetchone()[0]:,}"
+    print(f"""
+  Events    {n("SELECT COUNT(*) FROM hackathons")} listed · {n("SELECT COUNT(*) FROM hackathons WHERE cash_usd_est IS NOT NULL")} prize pages · \
+{n("SELECT COUNT(*) FROM hackathons WHERE submissions_count > 0")} galleries · \
+{n("SELECT COUNT(*) FROM hackathons WHERE categories_done > 0")} with categories
+  Projects  {n("SELECT COUNT(*) FROM projects")} projects · {n("SELECT COUNT(*) FROM submissions WHERE is_winner = 1")} winners · \
+{n("SELECT COUNT(*) FROM projects WHERE detail_fetched = 1")} full pages
+  Pages     {n("SELECT COUNT(*) FROM pages WHERE status = 200")} saved · \
+{n("SELECT COUNT(*) FROM pages WHERE status IS NULL OR status != 200")} failed""")
+    tiers = dict(conn.execute("SELECT tier, COUNT(*) FROM event_scores_latest GROUP BY tier").fetchall())
     if tiers:
-        print("latest junk scoring: " + ", ".join(f"{t} {n}" for t, n in tiers))
+        print("  Scoring   " + " · ".join(f"{tiers.get(t, 0):,} {t}" for t in ("ok", "watch", "junk")))
+    print()
 
 
 if __name__ == "__main__":

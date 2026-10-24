@@ -1,96 +1,173 @@
 # hackathon-index
 
-A local database of past hackathons, their prizes, and their submissions (all winners, plus a sample of non-winners). The goal is to find out what actually wins: by series, by sponsor track, and by kind of idea.
+A local, queryable database of past hackathons: their prizes, judges and submissions, with full pages for every winner and a balanced sample of non-winners. It's built to answer one question with data instead of folklore: **what actually wins?**
 
-Devpost is the first source. The schema is source-agnostic, so Lablab, DoraHacks, or offline events can be added later as new `sources/<platform>` packages, or entered by hand.
+Devpost is the first source. The schema is source-agnostic, so other platforms (Lablab, DoraHacks) or offline events can be added as new `sources/<platform>` packages.
 
-## How it works
+```
+  Events    7,565 listed · 4,379 prize pages · 1,429 galleries · 673 with categories
+  Projects  152,320 projects · 18,646 winners · 30,841 full pages
+  Pages     51,304 saved · 0 failed
+  Scoring   970 ok · 275 watch · 184 junk
+```
+<sub>Coverage as of October 2026: events that ended from 2022 onward, galleries for events with at least $1k in cash prizes.</sub>
 
-Collect first, parse in detail later. Every fetched page is saved gzipped under `data/raw/` and recorded in the `pages` table. Re-running a command never fetches the same page twice, and parsers can be improved and re-run offline.
+## Highlights
 
-| Stage | Fetches | Which events |
+- **Polite, resumable crawler.** Every page is cached the moment it arrives, so nothing is fetched twice and a crash or Ctrl-C resumes where it stopped. Pacing adapts to the server: it backs off on 429/403/5xx, honours `Retry-After`, and halts rather than hammering.
+- **Collect first, parse later.** Raw pages are kept gzipped. Improving a parser means re-parsing the saved pages on every CPU core, not crawling again.
+- **Non-winners sampled on purpose.** "Winners use X" means nothing unless losers use X less. Each event gets a capped, deterministic sample: the most-liked near-misses, then round-robin across prize categories, then a seeded random fill.
+- **Nothing is ever destroyed.** Every cleaning step writes a new versioned run to its own table and snapshots the database first. Any earlier state is one `restore` away.
+- **One entry point.** `./run.sh` opens an interactive menu that shows the equivalent command for every choice. The same flags work in scripts and cron.
+
+## Quick start
+
+Requires Python 3.10+.
+
+```bash
+git clone https://github.com/m-azzam-azis/hackathon-index && cd hackathon-index
+./run.sh            # sets up .venv on first run, then opens the menu
+```
+
+```
+? What do you want to do?
+ » Status: what's collected so far
+   Update: new events and newly announced winners
+   Go further back: add an earlier year
+   Sample non-winners: full pages for a balanced sample
+   Re-parse saved pages (after a parser update, no network)
+   Score events: flag junk and swag-only events
+   Snapshots: list, save, or restore a copy of the database
+   Quit
+```
+
+Each choice prints its command line (for example `./run.sh crawl all --since 2022-01-01`) and asks before running it. On macOS the laptop is kept awake while crawling.
+
+## Pipeline
+
+```mermaid
+flowchart LR
+    L[list<br/>listing JSON] --> O[overview<br/>prizes, judges]
+    O --> G[gallery<br/>every submission card]
+    G --> C[categories<br/>per-prize filtered galleries]
+    G --> P[projects<br/>winners + sampled non-winners]
+    C --> P
+    P --> S[score<br/>junk / swag-only flags]
+    S --> N[next: prize labels,<br/>project tags, win rates]
+```
+
+| Stage | Fetches | For which events |
 |---|---|---|
-| `list` | Devpost's listing JSON, 40 events per request | every ended event; keeps those that closed on or after `--since` |
-| `overview` | the event page (prize blocks and judges) | in-window, not invite-only, with any cash prize |
-| `gallery` | every gallery page (all submission cards) | winners announced, and estimated cash ≥ `--min-cash` (or a low-confidence estimate whose headline clears it) |
-| `categories` | per-prize filtered galleries (`/submissions/search?prize_filter…`), up to `--category-pages` pages each | events with ≥ `--min-submissions` submissions whose gallery has a prize filter; runs with the non-winner pass |
-| `projects` | full project pages | all winners; optionally `--loser-rate` of non-winners per event (events with ≥ `--min-submissions`), clamped to `--min-losers`..`--max-losers` (default cap 40) |
+| `list` | Devpost's listing API, 40 events per request | every ended event that closed on or after `--since` |
+| `overview` | the event page: prize blocks and judges | in window, not invite-only, with any cash prize |
+| `gallery` | every gallery page (title, tagline, likes, team, winner badge) | winners announced and estimated cash ≥ `--min-cash` |
+| `categories` | galleries filtered by each prize, up to `--category-pages` pages | events with ≥ `--min-submissions` entries; runs with the non-winner pass |
+| `projects` | full project pages: writeup, built-with, links, videos, team | all winners, plus `--loser-rate` of non-winners clamped to `--min-losers`..`--max-losers` |
 
-The non-winner sample is picked in priority order: the `--top-liked` most-liked (near-miss candidates), then round-robin across categories so every category is represented, then a seeded random fill. It's deterministic: the same event always gives the same picks, new events don't change old ones, and raising the cap only adds projects. The ordering uses project URLs, so even a rebuilt database picks the same ones.
+Filters are deliberately loose so small but real events aren't dropped. Separating signal from noise is the job of the scoring step, which works on the stored data.
 
-The filters are loose on purpose, so small events that are real aren't dropped. Deciding which events are junk is a scoring step on the stored data.
+## Design notes
 
-The cash estimate is rough. A prize block labelled "$X in cash" counts as cash. Otherwise, amounts are pulled from the prize text, skipping ones followed by "credits", "worth of", and similar, and the estimate is marked `low` confidence. Classifying prizes properly into cash, credits, or swag is a later LLM pass over `prizes.description`.
+**Pacing.** By default, 3 workers each make a request every 0.5 s plus jitter. Every retryable failure doubles the shared interval (up to 30 s), and 50 successes in a row ease it back. Retries wait 1, 2, 5, then 10 minutes. If 3 URLs in a row fail even after all retries, the run stops cleanly. Workers only fetch and parse; every database write happens on the main thread, and a lock file stops two runs from sharing a data folder.
 
-## Pacing
+**Monthly updates.** Listing pages are re-fetched only while they still hold events that ended in the last 60 days (`--refresh-days`). So a monthly `Update` picks up new events and newly announced winners without walking old history again.
 
-The crawler starts fast and only slows down when Devpost pushes back. By default it runs `--workers 3` in parallel, each making one request every `--interval` seconds (default 0.5) plus up to 0.3 s of random jitter. That's roughly 3x the single-worker speed. Use `--workers 1` for the old sequential behaviour. Threads only fetch and parse, and all database writes happen on the main thread. A lock file stops two crawls running on the same data folder at once.
+**Non-winner sampling.** The sample is keyed on project URLs, not database ids. The same event always yields the same picks, new events never change old ones, and raising the cap only adds projects. Huge events stay bounded: a 600-entry event gets 40 non-winners, not 90.
 
-- **Auto retry.** A 429, 403, 5xx, timeout, or network error is retried up to 4 times, waiting 1, 2, 5, then 10 minutes, and honouring `Retry-After`.
-- **Adaptive pacing.** Each retryable failure doubles the gap between requests, up to 30 s. The slowdown is shared, so all workers slow down together. Every 50 successes in a row eases it back toward `--interval`.
-- **Halt instead of hammering.** If 3 URLs in a row fail even after all retries (offline, or blocked), the run stops cleanly.
-- **Resume.** Every page is cached the moment it arrives, and each stage skips work that's already done. Re-running after a crash, Ctrl-C, or halt picks up where it stopped. Failed URLs are tried again, while final answers like 404 are not. Use `--reparse` to re-run parsers over the cached pages.
+**Cash estimate.** A prize block labelled "$X in cash" counts as cash with high confidence. Otherwise amounts are pulled from the prize text, skipping ones followed by "credits", "gift card", "worth of" and the like, and the estimate is marked low confidence. A proper cash / credits / swag classification is on the roadmap.
 
-Do winners first, losers later. By default, `projects` fetches winners only. Every submission's title, tagline, likes, and team already come from the gallery cards. To fetch full pages for a sample of non-winners, run a second pass, for example `crawl projects --loser-rate 0.1 --min-losers 5`. The cap matters for huge events: a 600-submission event gets 40, not 60. Of those 40, the 10 most-liked are near-miss candidates and the rest are random, so the sample isn't only popular projects. Cached pages are skipped.
+**Junk scoring.** Weighted flags per event, summed into `ok` (≤ 1), `watch` (2–3) or `junk` (≥ 4). Nothing is excluded; analysis filters on the tier.
 
-Rough volume for 2024 onward with winners only: about 350 listing requests, a few thousand overview pages, then gallery and winner pages, roughly 15k requests in total. That's around 3 hours if Devpost never pushes back, longer if it does.
+| Flag | Weight | Meaning |
+|---|---|---|
+| `no_cash` | +4 | only swag, gift cards or credits found in the prizes |
+| `tiny_field` / `small_field` | +3 / +1 | under 10 / 10–19 submissions |
+| `low_cash` | +2 | some cash, but under $1k |
+| `few_registrants` | +2 | under 30 registrants |
+| `prize_per_entry_absurd` | +2 | over $2,500 per submission with under 20 entries |
+| `no_judges`, `one_off_organizer`, `weak_winner_writeups`, `winners_without_code` | +1 each | weaker signals |
+| `managed_by_devpost` / `repeat_organizer` | −2 / −1 | trust signals |
 
-## Run
+**Snapshots.** `score`, `--reparse` and `restore` each save a full copy of `index.db` to `data/snapshots/` first (about 270 MB each today). Delete old copies by hand when space matters.
 
-```bash
-./run.sh            # pull the latest code, set up .venv if needed, crawl every stage (resumes)
-./run.sh status     # what's collected so far
-./run.sh --limit 10 # any crawl option passes through, e.g. a pilot run
-```
+## Commands
 
-On macOS it keeps the laptop awake while running. Each stage prints one live line:
+Everything the menu does is also a command. `./run.sh <command>` and `hackathon-index <command>` are equivalent; options alone (`./run.sh --loser-rate 0.15`) mean `crawl all`.
 
-```
-[gallery] 112/340 (33%) · eta 41m10s · 1.4 req/s · pace 0.5s · retries 0 · AWS AI Agent Global Hackathon: 610 submissions
-```
+| Command | What it does |
+|---|---|
+| `menu` | the interactive menu (default for `./run.sh` in a terminal) |
+| `status` | what's collected so far |
+| `crawl {list,overview,gallery,categories,projects,all}` | run one stage, or all of them in order |
+| `score` | junk-event scoring; a new run each time, earlier runs kept |
+| `snapshot [label]` · `snapshots` · `restore NAME` | save, list, and go back to copies of the database |
 
-If `pace` climbs above 0.5s, Devpost is pushing back and the crawler has slowed itself down.
+Useful `crawl` options:
 
-Later, to get full pages for a sample of non-winners, balanced across categories:
+| Option | Default | |
+|---|---|---|
+| `--since` | `2024-01-01` | keep events that closed on or after this date |
+| `--min-cash` | `1000` | USD cash needed to crawl an event's gallery |
+| `--loser-rate` / `--min-losers` / `--max-losers` | `0` / `0` / `40` | non-winner sample per event |
+| `--top-liked` | `10` | how many of the sample are the most-liked |
+| `--min-submissions` | `10` | skip categories and non-winners for smaller events |
+| `--workers` / `--interval` | `3` / `0.5` | parallel requests, seconds between requests per worker |
+| `--reparse` | | re-parse saved pages instead of fetching |
+| `--limit` | | only the N most recent qualifying events (pilot runs) |
 
-```bash
-./run.sh --loser-rate 0.15 --min-losers 5   # also runs the category pass first
-```
-
-Going further back, or keeping it up to date:
-
-```bash
-./run.sh --since 2022-01-01   # add older events; the listing is cached, so old pages aren't re-fetched
-./run.sh                      # monthly: re-fetches listing pages with events from the last 60 days
-                              # (--refresh-days), then crawls new events and newly announced winners
-```
-
-## Cleaning steps (offline, nothing deleted)
-
-Every step after the crawl only adds. It writes its results to its own table under a new run id, never edits the crawl tables or earlier runs, and saves a full copy of `index.db` to `data/snapshots/` first. `crawl ... --reparse` also snapshots first.
-
-```bash
-./run.sh score              # junk-event scoring, a new run each time
-./run.sh snapshots          # list saved copies
-./run.sh restore NAME       # go back to one (the current state is snapshotted first)
-./run.sh snapshot my-label  # save a copy by hand
-```
-
-Junk scoring (`event_scores`, newest run in the `event_scores_latest` view) adds weighted flags per event and labels it `ok` (score ≤ 1), `watch` (2–3) or `junk` (≥ 4). Flags: `no_cash` (only swag, gift cards or credits found, +4), `low_cash` (under $1k, +2), `tiny_field` (under 10 submissions, +3), `small_field` (10–19, +1), `few_registrants` (under 30, +2), `prize_per_entry_absurd` (over $2,500 per submission with under 20 entries, +2), `no_judges`, `one_off_organizer`, `weak_winner_writeups`, `winners_without_code` (+1 each). Trust signals subtract: `managed_by_devpost` (−2), `repeat_organizer` with 5+ events (−1). `reason` holds the heaviest flag. Nothing is excluded; analysis queries filter on the tier.
-
-Each snapshot is a full copy (about 270 MB today), so delete old ones from `data/snapshots/` by hand when space matters.
-
-Manual equivalent: `python -m hackathon_index crawl {list,overview,gallery,projects,all} [options]`, then `pytest -q` for the tests.
+## Data model
 
 Everything lands in `data/index.db` (SQLite). Open it with `sqlite3`, DB Browser for SQLite, or Datasette.
 
-## Tables
+| Table | One row per |
+|---|---|
+| `hackathons` | event: dates, organizer, themes, registrants, submissions, cash estimate, judges count |
+| `prizes` | prize block: title, value, "in cash" flag, winner count, description |
+| `judges` | judge: name and title |
+| `projects` | project: title, tagline, likes, built-with, links, `has_repo`, `video_urls`, `writeup` (JSON section → text) |
+| `submissions` | project × event, with `is_winner` and gallery rank (projects are often entered in several events) |
+| `submission_prizes` | prize a project won, e.g. "Best Use of Neo4j" |
+| `submission_categories` | prize category a project entered |
+| `people`, `project_members` | Devpost profiles, for builder track records |
+| `pages` | every fetched URL: status, time, path of the gzipped body |
+| `enrich_runs`, `event_scores` | each cleaning run, and each event's score in it (`event_scores_latest` view) |
 
-- `hackathons`: one row per event. Listing metadata, `registrants`, `submissions_count` (from the gallery), `cash_usd_est`, `cash_confidence`, `judges_count`.
-- `prizes`: one row per prize block: title, value, "in cash" flag, winner count, description.
-- `judges`: name and title.
-- `projects`: title, tagline, likes, built-with, links, `has_repo`, `has_video`, `video_urls` (YouTube/Vimeo watch links), `image_count`, `writeup` (JSON of section → text), `writeup_chars`.
-- `submissions`: project × hackathon, with `is_winner` and gallery rank. A project often appears under several hackathons.
-- `submission_prizes`: which prize a project won ("Best Use of Neo4j").
-- `people` and `project_members`: Devpost profiles, for builder track records later.
-- `enrich_runs` and `event_scores`: one row per cleaning run, and the junk score of each event in each run.
+## Project layout
+
+```
+hackathon_index/
+  __main__.py          CLI
+  menu.py              interactive menu
+  db.py                schema and migrations
+  fetcher.py           cached, adaptive, thread-safe HTTP fetcher
+  progress.py          one-line live progress
+  money.py             currency amounts in prize text
+  score.py             junk-event scoring
+  snapshot.py          database copies and restore
+  sources/devpost/
+    crawl.py           the five crawl stages and non-winner sampling
+    parse.py           pure parsers: HTML/JSON in, dicts out
+tests/                 parsers, pipeline, fetcher, parallel crawl, scoring, menu
+run.sh                 entry point: pull, set up .venv, run
+```
+
+## Development
+
+```bash
+pip install -e '.[dev]'
+pytest -q
+```
+
+The tests run offline: parsers against trimmed real pages, and the full pipeline against a fake Devpost served through `httpx.MockTransport`. They check that parallel and sequential crawls give identical results, that resume makes no requests, and that sampling is stable.
+
+## Roadmap
+
+- Prize classification (cash, credits or swag) with an LLM over `prizes.description`
+- Project tagging: domain, sponsor tech used, kind of AI use
+- Win-rate analysis against the non-winner sample, by event size and sponsor
+- Datasette dashboard and natural-language querying (an LLM writes SQL, SQLite does the counting)
+- More sources: Lablab, DoraHacks, offline events
+
+## Responsible use
+
+This is a personal research tool. It caches every page so nothing is requested twice, keeps request rates low, backs off as soon as the server pushes back, and identifies itself in its user agent. The collected data (`data/`) is not part of the repository. Check the terms of any site before crawling it.
