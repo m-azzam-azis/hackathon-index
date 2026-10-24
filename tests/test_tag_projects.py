@@ -113,9 +113,18 @@ def test_incomplete_reply_is_an_error():
     assert tags is None and "1 of 3" in error and fake.calls == tp.ATTEMPTS
 
 
+def test_misnumbered_answers_are_read_by_title():
+    misnumbered = reply((1, "MedPrompt AI", "Checks symptoms and finds first aid help."),
+                        (2, "Zesty", "An unrecommendation engine of opposite tastes."),
+                        (3, "GeoTaste", "Maps business opportunities by neighbourhood with Qloo."))
+    tags, _, error = tp._tag(Fake(misnumbered), ("prompt", BATCH))
+    assert error is None and "Qloo" in tags[10]["summary"] and "first aid" in tags[11]["summary"]
+
+
 def test_answer_on_the_wrong_project_is_retried_then_kept():
-    shifted = reply((1, "MedPrompt AI", "Checks symptoms and finds first aid."),
-                    (2, "Zesty", "An unrecommendation engine."), (3, "GeoTaste", "Maps business opportunities."))
+    shifted = reply((1, "GeoTaste", "Checks symptoms and finds first aid help fast."),
+                    (2, "MedPrompt AI", "An unrecommendation engine of opposite tastes."),
+                    (3, "Zesty", "Maps business opportunities by neighbourhood with Qloo and Mapbox."))
     right = reply((1, "GeoTaste", "Maps business opportunities by neighbourhood with Qloo."),
                   (2, "MedPrompt AI", "Checks symptoms and finds first aid help."),
                   (3, "Zesty", "An unrecommendation engine of opposite tastes."))
@@ -136,6 +145,7 @@ def test_summary_that_reads_like_a_neighbour_is_rejected():
 
 def test_title_matching():
     assert tp.same_title("Riḥla", "Rihla") and tp.same_title("GeoTaste: Your Business Consultant Agent", "GeoTaste")
+    assert tp.same_title("A+ Foundary", "A+ Foundry")
     assert not tp.same_title("GeoTaste", "MedPrompt AI") and tp.same_title(".", "anything")
 
 

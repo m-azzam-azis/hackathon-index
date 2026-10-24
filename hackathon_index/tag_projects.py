@@ -23,6 +23,7 @@ import math
 import re
 import unicodedata
 from collections import Counter, defaultdict
+from difflib import SequenceMatcher
 from datetime import datetime, timezone
 from itertools import combinations
 from pathlib import Path
@@ -135,12 +136,15 @@ def _norm(title) -> str:
 
 
 def same_title(given, echoed) -> bool:
-    """Exact after normalising, or one a prefix of the other (long titles get shortened).
-    A title with no letters or digits can't be checked, so it passes."""
+    """Equal after normalising, one a prefix of the other (long titles get shortened), or
+    close enough to be a corrected typo ("A+ Foundary" echoed as "A+ Foundry"). A title with
+    no letters or digits can't be checked, so it passes."""
     a, b = _norm(given), _norm(echoed)
     if not a:
         return True
-    return a == b or (min(len(a), len(b)) >= 6 and (a.startswith(b) or b.startswith(a)))
+    if a == b or (min(len(a), len(b)) >= 6 and (a.startswith(b) or b.startswith(a))):
+        return True
+    return min(len(a), len(b)) >= 5 and SequenceMatcher(None, a, b).ratio() >= 0.85
 
 
 _STOP = set("the and for with from that this its are can into their them they user users using uses use "
@@ -185,12 +189,19 @@ def _read_reply(answer, projects: list[tuple]) -> dict:
         raise LLMError(f"no projects list in reply: {str(answer)[:150]}")
     tags = {}
     for item in items:
-        n = int(_num(item.get("n"))) if isinstance(item, dict) else 0
-        if not 1 <= n <= len(projects):
+        if not isinstance(item, dict):
             continue
-        pid, title, _ = projects[n - 1]
-        if not same_title(title, item.get("title")):
-            raise LLMError(f"answer {n} is titled {str(item.get('title'))[:60]!r}, expected {title[:60]!r}")
+        n = int(_num(item.get("n")))
+        # The echoed title decides which project an answer is for; the number only breaks ties
+        # (a title with no letters matches anything). A model that numbers the answers wrong
+        # but keeps each title with its own answer is still read correctly.
+        matches = [i for i, (_, title, _) in enumerate(projects) if same_title(title, item.get("title"))]
+        if not matches:
+            raise LLMError(f"answer {n} is titled {str(item.get('title'))[:60]!r}, which matches no project")
+        i = n - 1 if n - 1 in matches else matches[0]
+        pid = projects[i][0]
+        if pid in tags:
+            raise LLMError(f"two answers for {projects[i][1][:60]!r}")
         tags[pid] = normalise(item, len(projects))
     if len(tags) < len(projects):
         raise LLMError(f"reply covered {len(tags)} of {len(projects)} projects")
