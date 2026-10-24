@@ -177,6 +177,31 @@ CREATE VIEW IF NOT EXISTS event_labels_latest AS
     WHERE l.error IS NULL
       AND l.run_id = (SELECT run_id FROM enrich_runs WHERE step = 'events' ORDER BY created_at DESC LIMIT 1);
 
+-- LLM tags per project (tag_projects.py). The model isn't told who won.
+CREATE TABLE IF NOT EXISTS project_tags (
+    run_id           TEXT NOT NULL REFERENCES enrich_runs(run_id),
+    project_id       INTEGER NOT NULL REFERENCES projects(id),
+    hackathon_id     INTEGER REFERENCES hackathons(id),   -- the event it was tagged against
+    domain           TEXT,          -- health | education | fintech | ... | other
+    ai_role          TEXT,          -- none | llm_wrapper | rag | agent | multi_agent | custom_ml | ...
+    form             TEXT,          -- web_app | mobile_app | hardware | bot | ...
+    sponsor_tech     TEXT,          -- central | passing | none
+    originality      INTEGER,       -- 0-10
+    technical_depth  INTEGER,       -- 0-10
+    polish           INTEGER,       -- 0-10
+    specific_user    INTEGER,
+    real_use         INTEGER,
+    summary          TEXT,
+    cost             REAL,
+    error            TEXT,
+    PRIMARY KEY (run_id, project_id)
+);
+
+CREATE VIEW IF NOT EXISTS project_tags_latest AS
+    SELECT t.* FROM project_tags t
+    WHERE t.error IS NULL
+      AND t.run_id = (SELECT run_id FROM enrich_runs WHERE step = 'tags' ORDER BY created_at DESC LIMIT 1);
+
 CREATE TABLE IF NOT EXISTS project_members (
     project_id  INTEGER NOT NULL REFERENCES projects(id),
     person_id   INTEGER NOT NULL REFERENCES people(id),

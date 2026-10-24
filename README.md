@@ -38,6 +38,7 @@ git clone https://github.com/m-azzam-azis/hackathon-index && cd hackathon-index
    Re-parse saved pages (after a parser update, no network)
    Grade events with an LLM: stakes, sponsors, competition
    Score events: flag junk and swag-only events
+   Tag projects with an LLM: domain, AI use, originality, depth
    Snapshots: list, save, or restore a copy of the database
    Quit
 ```
@@ -61,8 +62,10 @@ flowchart LR
     G --> C[categories<br/>per-prize filtered galleries]
     G --> P[projects<br/>winners + sampled non-winners]
     C --> P
-    P --> S[score<br/>junk / swag-only flags]
-    S --> N[next: prize labels,<br/>project tags, win rates]
+    P --> E[grade events<br/>LLM: stakes, sponsors]
+    E --> S[score<br/>ok / watch / junk]
+    S --> T[tag projects<br/>LLM, ok events only]
+    T --> N[next: win rates,<br/>dashboard]
 ```
 
 | Stage | Fetches | For which events |
@@ -109,7 +112,21 @@ Two rules encode the researcher's own judgement: a company-run online challenge 
 
 Test before a full run: `label-events --sample 30` grades a spread of events with two cheap models and writes a side-by-side review file without touching the database. Hackathons listed in `anchors.txt` as great, ok or meh (see `anchors.example.txt`) are always included, and the review counts how many each model agrees with. A full run over about 1,400 events costs one to two dollars with a flash-class model. It stops at `--max-cost` and resumes if interrupted.
 
-**Snapshots.** `score`, `label-events`, `--reparse` and `restore` each save a full copy of `index.db` to `data/snapshots/` first (about 270 MB each today). Delete old copies by hand when space matters.
+**Project tags.** Every full project page from an `ok` event, winners and sampled non-winners alike, gets one LLM call over its title, tagline, built-with list, writeup and the event's prize tracks. The model is never told who won, so both groups are tagged the same way and win rates compare like with like. It returns fixed-list tags and three scores:
+
+| Field | Values |
+|---|---|
+| `domain` | health, education, fintech, climate, accessibility, devtools, productivity, social, gaming, security, commerce, civic, science, other |
+| `ai_role` | none, llm_wrapper, rag, agent, multi_agent, custom_ml, computer_vision, voice |
+| `form` | web_app, mobile_app, browser_extension, hardware, bot, game, ar_vr, api_library, data_analysis, other |
+| `sponsor_tech` | central, passing, none |
+| `originality`, `technical_depth`, `polish` | 0–10 each |
+| `specific_user`, `real_use` | names a specific user; shows real users, a pilot or a deployment |
+| `summary` | one plain sentence, for the dashboard and similarity search |
+
+`tag-projects --sample 40` tests two models on 20 winners and 20 non-winners and projects the cost of a full run; the full run is resumable and stops at `--max-cost`.
+
+**Snapshots.** `score`, `label-events`, `tag-projects`, `--reparse` and `restore` each save a full copy of `index.db` to `data/snapshots/` first (about 270 MB each today). Delete old copies by hand when space matters.
 
 ## Commands
 
@@ -122,6 +139,7 @@ Everything the menu does is also a command. `./run.sh <command>` and `hackathon-
 | `crawl {list,overview,gallery,categories,projects,all}` | run one stage, or all of them in order |
 | `label-events [--sample N] [--model M]` | LLM grade per event; `--sample` writes a review file only |
 | `score` | junk-event scoring; a new run each time, earlier runs kept |
+| `tag-projects [--sample N] [--model M]` | LLM tags per project in `ok` events; `--sample` writes a review file only |
 | `snapshot [label]` · `snapshots` · `restore NAME` | save, list, and go back to copies of the database |
 
 Useful `crawl` options:
@@ -155,6 +173,7 @@ Everything lands in `data/index.db` (SQLite). Open it with `sqlite3`, DB Browser
 | `enrich_runs` | each cleaning run: step, rules version, parameters, snapshot taken before it |
 | `event_labels` | each event's LLM grade in each run: prize values, four scores, quality, grade (`event_labels_latest` view) |
 | `event_scores` | each event's junk score in each run (`event_scores_latest` view) |
+| `project_tags` | each project's LLM tags in each run: domain, AI role, form, sponsor tech, three scores, summary (`project_tags_latest` view) |
 
 ## Project layout
 
@@ -169,6 +188,7 @@ hackathon_index/
   llm.py               OpenAI-compatible client (OpenRouter by default), .env loading
   label_events.py      LLM grade per event
   score.py             junk-event scoring
+  tag_projects.py      LLM tags per project
   snapshot.py          database copies and restore
   sources/devpost/
     crawl.py           the five crawl stages and non-winner sampling
@@ -188,7 +208,6 @@ The tests run offline: parsers against trimmed real pages, and the full pipeline
 
 ## Roadmap
 
-- Project tagging: domain, sponsor tech used, kind of AI use
 - Win-rate analysis against the non-winner sample, by event size and sponsor
 - Datasette dashboard and natural-language querying (an LLM writes SQL, SQLite does the counting)
 - More sources: Lablab, DoraHacks, offline events

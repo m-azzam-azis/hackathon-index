@@ -31,6 +31,7 @@ def run(data: Path) -> None:
             "Re-parse saved pages (after a parser update, no network)",
             "Grade events with an LLM: stakes, sponsors, competition",
             "Score events: flag junk and swag-only events",
+            "Tag projects with an LLM: domain, AI use, originality, depth",
             "Snapshots: list, save, or restore a copy of the database",
             "Quit",
         ]).ask()
@@ -44,6 +45,7 @@ def run(data: Path) -> None:
             "Re-parse saved pages": reparse,
             "Grade events with an LLM": label_events,
             "Score events": lambda: ["score"],
+            "Tag projects with an LLM": tag_projects,
             "Snapshots": lambda: snapshots(data),
         }[choice.split(":")[0].split(" (")[0]]()
         if args:
@@ -105,6 +107,20 @@ def label_events() -> list[str]:
     model = questionary.text("Model", default="anthropic/claude-haiku-5.5").ask()
     cap = questionary.text("Stop after spending (USD)", default="3").ask()
     return ["label-events", "--model", model, "--max-cost", cap] if model and cap else []
+
+
+def tag_projects() -> list[str]:
+    mode = questionary.select("Which run?", choices=[
+        "Test: 40 projects with 2 models, writes a review file (a few cents)",
+        "Full run: every project in an ok event with one model (snapshot first, resumable)",
+    ]).ask()
+    if not mode:
+        return []
+    if mode.startswith("Test"):
+        return ["tag-projects", "--sample", "40"]
+    model = questionary.text("Model", default="anthropic/claude-haiku-5.5").ask()
+    cap = questionary.text("Stop after spending (USD)", default="15").ask()
+    return ["tag-projects", "--model", model, "--max-cost", cap] if model and cap else []
 
 
 def reparse() -> list[str]:

@@ -53,10 +53,17 @@ def main() -> None:
     le = sub.add_parser("label-events")
     le.add_argument("--sample", type=int, help="test on N events; writes a review file, not the database")
     le.add_argument("--compare", help="comma-separated models for --sample (default: two cheap ones)")
-    le.add_argument("--model", help="model for a full run (default: deepseek/deepseek-v4.1-flash)")
+    le.add_argument("--model", help="model for a full run (default: anthropic/claude-haiku-5.5)")
     le.add_argument("--workers", type=int, default=16, help="parallel API calls")
     le.add_argument("--max-cost", type=float, default=3.0, help="stop once this many USD are spent")
     le.add_argument("--limit", type=int, help="label at most N events this run (it resumes later)")
+    tp = sub.add_parser("tag-projects")
+    tp.add_argument("--sample", type=int, help="test on N projects; writes a review file, not the database")
+    tp.add_argument("--compare", help="comma-separated models for --sample (default: two cheap ones)")
+    tp.add_argument("--model", help="model for a full run (default: anthropic/claude-haiku-5.5)")
+    tp.add_argument("--workers", type=int, default=16, help="parallel API calls")
+    tp.add_argument("--max-cost", type=float, default=15.0, help="stop once this many USD are spent")
+    tp.add_argument("--limit", type=int, help="tag at most N projects this run (it resumes later)")
     sn = sub.add_parser("snapshot")
     sn.add_argument("label", nargs="?", default="manual")
     sub.add_parser("snapshots")
@@ -76,7 +83,7 @@ def main() -> None:
     if args.cmd == "snapshot":
         snapshot.take(db_path, args.label)
         return
-    if args.cmd in ("score", "restore", "crawl", "label-events"):
+    if args.cmd in ("score", "restore", "crawl", "label-events", "tag-projects"):
         lock = take_lock(args.data)
     if args.cmd == "restore":
         print(f"restored {snapshot.restore(db_path, args.name).name}")
@@ -96,6 +103,15 @@ def main() -> None:
         else:
             snap = snapshot.take(db_path, "before-label-events")
             le.full_run(conn, args.model or le.DEFAULT_MODEL, args.workers, args.max_cost, str(snap), args.limit)
+        return
+    if args.cmd == "tag-projects":
+        from . import tag_projects as tp
+        if args.sample:
+            models = args.compare.split(",") if args.compare else ([args.model] if args.model else tp.COMPARE_MODELS)
+            tp.sample(conn, args.data, args.sample, models, args.workers, args.max_cost)
+        else:
+            snap = snapshot.take(db_path, "before-tag-projects")
+            tp.full_run(conn, args.model or tp.DEFAULT_MODEL, args.workers, args.max_cost, str(snap), args.limit)
         return
 
     if args.reparse:

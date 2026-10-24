@@ -154,11 +154,13 @@ def _label(client: Client, prompt: str) -> tuple[dict | None, float, str | None]
         return None, 0.0, str(exc)[:300]
 
 
-def _run_all(client: Client, jobs: list[tuple], workers: int, prog: Progress, max_cost: float):
-    """jobs: (key, prompt). Yields (key, labels, cost, error); stops once max_cost is spent."""
-    spent = 0.0
+def _run_all(client: Client, jobs: list[tuple], workers: int, prog: Progress, max_cost: float,
+             label=None):
+    """jobs: (key, prompt). Yields (key, labels, cost, error); stops once max_cost is spent.
+    `label(client, prompt)` makes one call; tag_projects.py passes its own."""
+    spent, label = 0.0, label or _label
     with ThreadPoolExecutor(workers) as pool:
-        futures = {pool.submit(_label, client, prompt): key for key, prompt in jobs}
+        futures = {pool.submit(label, client, prompt): key for key, prompt in jobs}
         for fut in as_completed(futures):
             labels, cost, error = fut.result()
             spent += cost
