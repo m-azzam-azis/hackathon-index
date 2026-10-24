@@ -58,7 +58,7 @@ def test_sample_writes_review_only(tmp_path, monkeypatch):
     calls = []
     conn = setup(tmp_path, monkeypatch, calls)
     anchors = tmp_path / "anchors.txt"
-    anchors.write_text("+ Google Meetup\n- https://e3.devpost.com/\n- Not In Database\n")
+    anchors.write_text("+ Google Meetup\n- https://e3.devpost.com/\n~ Not In Database\n")
     out = le.sample(conn, tmp_path, 2, ["model-a", "model-b"], workers=2, max_cost=1, anchors_path=anchors)
     text = out.read_text()
     assert "**model-b**: **A**" in text and "your anchor: great" in text

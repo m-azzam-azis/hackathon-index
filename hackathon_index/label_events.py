@@ -57,6 +57,12 @@ top winners, and answer with one JSON object and nothing else:
       credits or swag counted as cash),
   "reason": one short sentence explaining the overall grade
 }
+Calibration from the researcher: open online challenges run by major tech companies, or by
+established developer-tool companies around their own product, are the gold standard. Student hackathons are middling at best: fine when they have several
+real cash prizes or tracks run by big corporate sponsors (e.g. Goldman Sachs), weak when the
+prizes are only gadgets such as MacBooks and AirPods, and weakest when most tracks are stock
+partner prizes.
+
 Count each prize once; when a prize has several winners, multiply. Convert other currencies
 to USD. Use 0 when a kind of reward is absent. Judge winners on what the writeups show; don't
 reward length or buzzwords alone."""
@@ -201,16 +207,20 @@ def pick_sample(conn, n: int) -> list:
     return picked
 
 
+ANCHOR_LEVELS = {"+": "great", "~": "ok", "-": "meh"}
+ANCHOR_GRADES = {"great": "AB", "ok": "BC", "meh": "CD"}  # grades that count as agreeing
+
+
 def load_anchors(path: Path) -> list[tuple[str, str]]:
-    """anchors.txt: one event per line, `+` for great and `-` for meh, then a URL or a title.
+    """anchors.txt: one event per line, `+` great, `~` ok, `-` meh, then a URL or a title.
     Anchors always join the sample, so the grades can be checked against your own judgement."""
     if not path.exists():
         return []
     out = []
     for line in path.read_text().splitlines():
         line = line.strip()
-        if line[:1] in "+-" and line[1:].strip():
-            out.append(("great" if line[0] == "+" else "meh", line[1:].strip()))
+        if line[:1] in ANCHOR_LEVELS and line[1:].strip():
+            out.append((ANCHOR_LEVELS[line[0]], line[1:].strip()))
     return out
 
 
@@ -247,7 +257,7 @@ def sample(conn, data: Path, n: int, models: list[str], workers: int, max_cost: 
     def agreement(model):
         ok = sum(1 for hid, label in expected.items()
                  if (lab := results[model].get(hid, (None,))[0])
-                 and (lab["grade"] in "AB") == (label == "great"))
+                 and lab["grade"] in ANCHOR_GRADES[label])
         return f"{ok} of {len(expected)}" if expected else "-"
 
     out = data / "review" / f"events-sample-{datetime.now():%Y%m%d-%H%M%S}.md"
@@ -255,7 +265,7 @@ def sample(conn, data: Path, n: int, models: list[str], workers: int, max_cost: 
     lines = [f"# Event grades: {len(events)} events ({len(expected)} of them your anchors)", "",
              "Per model: **grade** (quality 0-100) · winners / stakes / sponsor / competition (0-10) · "
              "event type · cash / products / credits (USD) · reason.",
-             "Anchors agree when great → A/B and meh → C/D.", "",
+             "Anchors agree when great → A/B, ok → B/C, meh → C/D.", "",
              "| Model | Cost | Errors | Anchors agreeing |", "|---|---|---|---|"]
     lines += [f"| {m} | ${c:.4f} | {e} of {len(events)} | {agreement(m)} |" for m, (c, e) in summary.items()]
     lines.append("")

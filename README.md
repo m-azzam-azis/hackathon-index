@@ -100,7 +100,7 @@ Filters are deliberately loose so small but real events aren't dropped. Separati
 
 Stock partner prizes cost 5 points and an unverifiable event is capped at 20. Scoring then uses the grades in place of the rough cash and organizer rules. The client works with any OpenAI-compatible API, and the key goes in a git-ignored `.env` file (`OPENROUTER_API_KEY=...`).
 
-Test before a full run: `label-events --sample 30` grades a spread of events with three cheap models and writes a side-by-side review file without touching the database. Hackathons listed in `anchors.txt` (see `anchors.example.txt`) are always included, and the review counts how many each model agrees with. A full run over about 1,400 events reads around 2.3M tokens, well under a dollar with a flash-class model. It stops at `--max-cost` and resumes if interrupted.
+Test before a full run: `label-events --sample 30` grades a spread of events with three cheap models and writes a side-by-side review file without touching the database. Hackathons listed in `anchors.txt` as great, ok or meh (see `anchors.example.txt`) are always included, and the review counts how many each model agrees with. A full run over about 1,400 events reads around 2.3M tokens, well under a dollar with a flash-class model. It stops at `--max-cost` and resumes if interrupted.
 
 **Snapshots.** `score`, `label-events`, `--reparse` and `restore` each save a full copy of `index.db` to `data/snapshots/` first (about 270 MB each today). Delete old copies by hand when space matters.
 
